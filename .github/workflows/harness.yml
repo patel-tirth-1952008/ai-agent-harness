@@ -2,19 +2,19 @@ name: AI Agent Harness 24/7 Runner
 
 on:
   schedule:
-    # 1. LeetCode Solver: Runs daily at 02:00 AM UTC
+    # 1. LeetCode Solver: every day at 02:00 UTC
     - cron: '0 2 * * *'
-    
-    # 2. Freelance Finder: Runs daily at 08:00 AM UTC
-    - cron: '0 8 * * *'
-    
-    # 3. Job Finder: Runs daily at 09:00 AM UTC
-    - cron: '0 9 * * *'
-    
-    # 4. Portfolio Builder: Runs every Monday at 03:00 AM UTC
-    - cron: '0 3 * * 1'
 
-  # Allows manual button trigger from GitHub UI anytime
+    # 2. Freelance Finder: every day at 08:00 UTC
+    - cron: '0 8 * * *'
+
+    # 3. Job Finder: every day at 09:00 UTC
+    - cron: '0 9 * * *'
+
+    # 4. Portfolio Builder: every 3 days at 03:00 UTC
+    - cron: '0 3 */3 * *'
+
+  # Manual run from GitHub UI
   workflow_dispatch:
     inputs:
       agent_to_run:
@@ -30,7 +30,8 @@ on:
           - all
 
 permissions:
-  contents: write  # Allows GitHub Actions to update data/*.json files back to your repo
+  contents: write   # commit data/*.json history updates
+  actions: write    # allow triggering verify/repair workflows
 
 jobs:
   run-agent:
@@ -40,10 +41,10 @@ jobs:
       - name: 1. Checkout Repository Code
         uses: actions/checkout@v4
 
-      - name: 2. Set up Python 3.11
+      - name: 2. Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
           cache: 'pip'
 
       - name: 3. Install Dependencies
@@ -64,8 +65,10 @@ jobs:
               echo "TARGET_AGENT=freelance" >> $GITHUB_ENV
             elif [ "$CRON_SCHEDULE" == "0 9 * * *" ]; then
               echo "TARGET_AGENT=jobs" >> $GITHUB_ENV
-            elif [ "$CRON_SCHEDULE" == "0 3 * * 1" ]; then
+            elif [ "$CRON_SCHEDULE" == "0 3 */3 * *" ]; then
               echo "TARGET_AGENT=portfolio" >> $GITHUB_ENV
+            else
+              echo "TARGET_AGENT=leetcode" >> $GITHUB_ENV
             fi
           fi
 
@@ -83,7 +86,7 @@ jobs:
           YOUR_SKILLS: ${{ secrets.YOUR_SKILLS }}
           YOUR_EXPERIENCE_YEARS: ${{ secrets.YOUR_EXPERIENCE_YEARS }}
           YOUR_RESUME_SUMMARY: ${{ secrets.YOUR_RESUME_SUMMARY }}
-          LITELLM_DROP_PARAMS: "true" # <--- Added this to strip unsupported Groq params
+          LITELLM_DROP_PARAMS: "true"
         run: |
           python run_once.py ${{ env.TARGET_AGENT }}
 
@@ -93,3 +96,33 @@ jobs:
           git config --global user.email "action@github.com"
           git add data/
           git diff --quiet && git diff --staged --quiet || (git commit -m "🤖 Auto-update data history [skip ci]" && git push)
+
+      - name: 7. Trigger Level-2 Verify (Portfolio only)
+        if: env.TARGET_AGENT == 'portfolio' || env.TARGET_AGENT == 'all'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          # Reads latest built project slug from portfolio history if present
+          if [ -f data/portfolio_history.json ]; then
+            REPO_NAME=$(python - <<'PY'
+          import json
+          try:
+              d=json.load(open("data/portfolio_history.json"))
+              built=d.get("built_projects") or []
+              print(built[-1] if built else "")
+          except Exception:
+              print("")
+          PY
+            )
+          else
+            REPO_NAME=""
+          fi
+
+          if [ -n "$REPO_NAME" ]; then
+            echo "Triggering verify-project for: $REPO_NAME"
+            gh workflow run verify-project.yml \
+              -f target_repo="$REPO_NAME" \
+              -f attempt=1 || echo "verify-project workflow not found yet (add it next)"
+          else
+            echo "No portfolio project slug found to verify."
+          fi
