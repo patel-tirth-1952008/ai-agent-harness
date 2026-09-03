@@ -6,70 +6,79 @@ from config import GITHUB_TOKEN, GITHUB_USERNAME
 
 class GitHubManager:
     def __init__(self):
-        # Fallback to GH_TOKEN or GITHUB_TOKEN from env
-        token = GITHUB_TOKEN or os.getenv("GH_TOKEN") or os.getenv("GITHUB_TOKEN")
+        token = (
+            GITHUB_TOKEN
+            or os.getenv("GH_TOKEN")
+            or os.getenv("GITHUB_TOKEN")
+            or ""
+        ).strip()
+
         if not token:
-            raise ValueError("GitHub Token is missing! Please set GITHUB_TOKEN or GH_TOKEN.")
+            raise ValueError("Missing GitHub token. Set GH_TOKEN secret.")
+
         self.gh = Github(token)
         self.user = self.gh.get_user()
+        self.username = (
+            GITHUB_USERNAME
+            or os.getenv("GH_USERNAME")
+            or os.getenv("GITHUB_USERNAME")
+            or self.user.login
+        )
 
-    def create_or_get_repo(self, repo_name: str, description: str = "") -> object:
-        """Create a new repo or return existing one."""
+    def create_or_get_repo(self, repo_name: str, description: str = ""):
+        # 1) Try existing repo first
         try:
             repo = self.user.get_repo(repo_name)
-            print(f"📁 Repository '{repo_name}' already exists. Updating...")
+            print(f"📁 Using existing repo: {repo.html_url}")
             return repo
         except GithubException:
+            pass
+
+        # 2) Try create only if missing
+        try:
             repo = self.user.create_repo(
                 name=repo_name,
-                description=description,
+                description=description or "Created by AI Agent Harness",
                 auto_init=True,
-                private=False
+                private=False,
             )
-            print(f"✅ Created new repository: {repo.html_url}")
-            time.sleep(3)
+            print(f"✅ Created repo: {repo.html_url}")
+            time.sleep(2)
             return repo
+        except GithubException as e:
+            raise Exception(
+                "GitHub token cannot create repositories (403). "
+                "Use a CLASSIC PAT with 'repo' scope, and/or pre-create the repo. "
+                f"Original error: {e}"
+            )
 
     def push_files(self, repo_name: str, files: dict, description: str = "") -> str:
-        """Push multiple files to a repository."""
         repo = self.create_or_get_repo(repo_name, description)
-        pushed_count = 0
-        failed_count = 0
+        ok, fail = 0, 0
 
-        for file_path, content in files.items():
+        for path, content in files.items():
             try:
+                content = content if isinstance(content, str) else str(content)
                 try:
-                    existing = repo.get_contents(file_path)
-                    repo.update_file(
-                        path=existing.path,
-                        message=f"Update {file_path}",
-                        content=content,
-                        sha=existing.sha
-                    )
-                    print(f"  📝 Updated: {file_path}")
+                    existing = repo.get_contents(path)
+                    repo.update_file(path, f"Update {path}", content, existing.sha)
+                    print(f"  📝 Updated: {path}")
                 except GithubException:
-                    repo.create_file(
-                        path=file_path,
-                        message=f"Add {file_path}",
-                        content=content
-                    )
-                    print(f"  ✅ Created: {file_path}")
-                pushed_count += 1
-                time.sleep(1)
+                    repo.create_file(path, f"Add {path}", content)
+                    print(f"  ✅ Created: {path}")
+                ok += 1
+                time.sleep(0.5)
             except Exception as e:
-                print(f"  ❌ Failed to push {file_path}: {e}")
-                failed_count += 1
+                print(f"  ❌ Failed {path}: {e}")
+                fail += 1
 
-        username = GITHUB_USERNAME or os.getenv("GH_USERNAME") or os.getenv("GITHUB_USERNAME")
-        repo_url = f"https://github.com/{username}/{repo_name}"
-        print(f"\n📊 Push complete: {pushed_count} succeeded, {failed_count} failed")
-        print(f"🔗 Repository: {repo_url}")
-        return repo_url
+        url = f"https://github.com/{self.username}/{repo_name}"
+        print(f"📊 Push done. success={ok}, failed={fail}")
+        print(f"🔗 {url}")
+        return url
 
     def push_single_file(self, repo_name: str, file_path: str, content: str, description: str = "") -> str:
-        """Push a single file to a repository."""
         return self.push_files(repo_name, {file_path: content}, description)
 
 
-# Global instance
 github_mgr = GitHubManager()
