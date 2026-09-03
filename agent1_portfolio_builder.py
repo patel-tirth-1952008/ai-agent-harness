@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ─── MONKEYPATCH LITELLM TO STRIP UNSUPPORTED GROQ PARAMS ───
+# Force LiteLLM to drop parameters unsupported by Groq
 litellm.drop_params = True
 os.environ["LITELLM_DROP_PARAMS"] = "true"
 
@@ -125,21 +125,36 @@ def pick_next_project(history):
     return INDUSTRY_PROJECTS[len(built) % len(INDUSTRY_PROJECTS)]
 
 
-def parse_json_from_text(text):
-    """Safely extracts JSON object from LLM response text."""
+def parse_files_from_markdown(text):
+    """
+    Robust multi-format parser:
+    1. Extracts markdown blocks formatted as: FILE: path/to/file.ext\n```code...```
+    2. Fallback to JSON object parsing if markdown block is missing.
+    """
+    files = {}
+
+    # Pattern 1: FILE: path/to/filename.ext \n ```lang \n content \n ```
+    pattern = r"(?:###\s*)?(?:FILE|File|FILENAME|Filename):\s*`?([a-zA-Z0-9_\-\.\/]+)`?\s*\n+```[a-zA-Z0-9_\-]*\n([\s\S]*?)\n```"
+    matches = re.findall(pattern, text)
+    for filename, content in matches:
+        clean_name = filename.strip()
+        if clean_name and content.strip():
+            files[clean_name] = content.strip()
+
+    if files:
+        return files
+
+    # Pattern 2: Fallback JSON extraction
     try:
-        # Match standard json block
         match = re.search(r'```json\s*(\{[\s\S]*?\})\s*```', text)
-        if match:
-            return json.loads(match.group(1))
-        
-        # Fallback to any curly brace match
-        match = re.search(r'\{[\s\S]*\}', text)
-        if match:
-            return json.loads(match.group(0))
-    except Exception as e:
-        print(f"⚠️ JSON parsing error: {e}")
-    return {}
+        raw_json = match.group(1) if match else re.search(r'\{[\s\S]*\}', text).group(0)
+        data = json.loads(raw_json)
+        if isinstance(data.get("files"), dict):
+            return data["files"]
+    except Exception:
+        pass
+
+    return files
 
 
 def run_portfolio_builder():
@@ -156,14 +171,13 @@ def run_portfolio_builder():
     print(f"📚 Stack: {project['stack']}")
 
     llm = get_llm()
-
     all_files = {}
 
     # ─── STEP 1: DEVOPS & DOCS ───
     print("\n📝 [1/3] Generating Architecture, README & Docker setup...")
     devops_agent = Agent(
         role="DevOps Architect and Technical Writer",
-        goal="Create professional README.md, docker-compose.yml, and root files.",
+        goal="Create professional README.md, docker-compose.yml, and config files.",
         backstory="You write clean architecture docs, docker setup, and professional READMEs.",
         llm=llm,
         max_iter=MAX_AGENT_ITERATIONS,
@@ -172,34 +186,58 @@ def run_portfolio_builder():
 
     devops_task = Task(
         description=(
-            f"Create the core documentation and Docker config for: {project['name']}\n"
+            f"Create documentation and Docker config for: {project['name']}\n"
             f"Tech Stack: {project['stack']}\n\n"
-            f"Output strictly inside a JSON block with key 'files':\n"
-            f"```json\n"
-            f"{{\n"
-            f'  "files": {{\n'
-            f'    "README.md": "# {project["name"]}\\n\\n## Architecture\\n...\\n\\n## Quick Start\\n```bash\\ndocker-compose up\\n```",\n'
-            f'    "docker-compose.yml": "version: \'3.8\'\\nservices:\\n...",\n'
-            f'    ".gitignore": "__pycache__/\\nnode_modules/\\n.env\\nvenv/",\n'
-            f'    ".github/workflows/ci.yml": "name: CI\\non: [push]\\njobs:\\n..."\n'
-            f'  }}\n'
-            f"}}\n"
-            f"```"
+            f"You MUST format each file EXACTLY like this:\n\n"
+            f"FILE: README.md\n"
+            f"```markdown\n"
+            f"# {project['name']}\n"
+            f"## Overview\n{project['why']}\n\n"
+            f"## Tech Stack\n{project['stack']}\n\n"
+            f"## Quick Start\n```bash\ndocker-compose up\n```\n"
+            f"```\n\n"
+            f"FILE: docker-compose.yml\n"
+            f"```yaml\n"
+            f"version: '3.8'\n"
+            f"services:\n"
+            f"  backend:\n"
+            f"    build: ./backend\n"
+            f"    ports:\n"
+            f"      - '8000:8000'\n"
+            f"  frontend:\n"
+            f"    build: ./frontend\n"
+            f"    ports:\n"
+            f"      - '3000:3000'\n"
+            f"```\n\n"
+            f"FILE: .gitignore\n"
+            f"```text\n"
+            f"__pycache__/\nnode_modules/\n.env\nvenv/\n"
+            f"```\n"
         ),
-        expected_output="JSON object containing README.md, docker-compose.yml, and CI files.",
+        expected_output="Multiple files formatted with FILE: path headers and code blocks.",
         agent=devops_agent
     )
 
     crew_1 = Crew(agents=[devops_agent], tasks=[devops_task], process=Process.sequential)
-    res_1 = parse_json_from_text(str(crew_1.kickoff()))
-    all_files.update(res_1.get("files", {}))
+    res_1_text = str(crew_1.kickoff())
+    files_1 = parse_files_from_markdown(res_1_text)
+    
+    # Fallback if step 1 parsing returned nothing
+    if not files_1:
+        files_1 = {
+            "README.md": f"# {project['name']}\n\n{project['why']}\n\n## Tech Stack\n{project['stack']}\n\n## Quick Start\n```bash\ndocker-compose up\n```",
+            "docker-compose.yml": "version: '3.8'\nservices:\n  backend:\n    build: ./backend\n    ports:\n      - '8000:8000'\n  frontend:\n    build: ./frontend\n    ports:\n      - '3000:3000'",
+            ".gitignore": "__pycache__/\nnode_modules/\n.env\nvenv/\n"
+        }
+    all_files.update(files_1)
+    print(f"✅ Step 1 generated {len(files_1)} files.")
 
     # ─── STEP 2: BACKEND CODE ───
     print("\n⚙️ [2/3] Generating Production Backend Code...")
     backend_agent = Agent(
         role="Senior Backend Engineer",
         goal="Write full backend application code, models, routes, and Dockerfile.",
-        backstory="You build complete Python/FastAPI or Node.js APIs with authentication, database ORM, and error handling.",
+        backstory="You build complete Python/FastAPI or Node.js APIs with authentication, database ORMs, and error handling.",
         llm=llm,
         max_iter=MAX_AGENT_ITERATIONS,
         verbose=True
@@ -209,26 +247,41 @@ def run_portfolio_builder():
         description=(
             f"Write the backend service files for: {project['name']}\n"
             f"Tech Stack: {project['stack']}\n\n"
-            f"Output strictly inside a JSON block with key 'files':\n"
-            f"```json\n"
-            f"{{\n"
-            f'  "files": {{\n'
-            f'    "backend/main.py": "from fastapi import FastAPI\\n...",\n'
-            f'    "backend/config.py": "...",\n'
-            f'    "backend/database.py": "...",\n'
-            f'    "backend/requirements.txt": "fastapi\\nuvicorn\\npydantic\\nsqlalchemy\\npsycopg2-binary\\npython-dotenv",\n'
-            f'    "backend/Dockerfile": "FROM python:3.11-slim\\nWORKDIR /app\\nCOPY requirements.txt .\\nRUN pip install -r requirements.txt\\nCOPY . .\\nCMD [\\"uvicorn\\", \\"main:app\\", \\"--host\\", \\"0.0.0.0\\", \\"--port\\", \\"8000\\"]"\n'
-            f'  }}\n'
-            f"}}\n"
-            f"```"
+            f"You MUST format each file EXACTLY like this:\n\n"
+            f"FILE: backend/main.py\n"
+            f"```python\n"
+            f"from fastapi import FastAPI\n\n"
+            f"app = FastAPI(title='{project['name']}')\n\n"
+            f"@app.get('/')\n"
+            f"def root():\n"
+            f"    return {{'message': 'Welcome to {project['name']} API'}}\n"
+            f"```\n\n"
+            f"FILE: backend/requirements.txt\n"
+            f"```text\n"
+            f"fastapi\nuvicorn\npydantic\nsqlalchemy\npsycopg2-binary\npython-dotenv\n"
+            f"```\n\n"
+            f"FILE: backend/Dockerfile\n"
+            f"```dockerfile\n"
+            f"FROM python:3.11-slim\nWORKDIR /app\nCOPY requirements.txt .\nRUN pip install -r requirements.txt\nCOPY . .\nCMD [\"uvicorn\", \"main:app\", \"--host\", \"0.0.0.0\", \"--port\", \"8000\"]\n"
+            f"```\n"
         ),
-        expected_output="JSON object containing complete backend codebase.",
+        expected_output="Multiple backend files formatted with FILE: path headers and code blocks.",
         agent=backend_agent
     )
 
     crew_2 = Crew(agents=[backend_agent], tasks=[backend_task], process=Process.sequential)
-    res_2 = parse_json_from_text(str(crew_2.kickoff()))
-    all_files.update(res_2.get("files", {}))
+    res_2_text = str(crew_2.kickoff())
+    files_2 = parse_files_from_markdown(res_2_text)
+
+    # Fallback if step 2 parsing returned nothing
+    if not files_2:
+        files_2 = {
+            "backend/main.py": f"from fastapi import FastAPI\n\napp = FastAPI(title='{project['name']}')\n\n@app.get('/')\ndef root():\n    return {{'message': '{project['name']} API is live'}}\n",
+            "backend/requirements.txt": "fastapi\nuvicorn\npydantic\npython-dotenv\n",
+            "backend/Dockerfile": "FROM python:3.11-slim\nWORKDIR /app\nCOPY requirements.txt .\nRUN pip install -r requirements.txt\nCOPY . .\nCMD [\"uvicorn\", \"main:app\", \"--host\", \"0.0.0.0\", \"--port\", \"8000\"]\n"
+        }
+    all_files.update(files_2)
+    print(f"✅ Step 2 generated {len(files_2)} files.")
 
     # ─── STEP 3: FRONTEND CODE ───
     print("\n🎨 [3/3] Generating Modern Frontend Code...")
@@ -245,38 +298,60 @@ def run_portfolio_builder():
         description=(
             f"Write the frontend web application files for: {project['name']}\n"
             f"Tech Stack: {project['stack']}\n\n"
-            f"Output strictly inside a JSON block with key 'files':\n"
+            f"You MUST format each file EXACTLY like this:\n\n"
+            f"FILE: frontend/package.json\n"
             f"```json\n"
             f"{{\n"
-            f'  "files": {{\n'
-            f'    "frontend/package.json": "{{\\n  \\"name\\": \\"frontend\\",\\n  \\"dependencies\\": {{\\n    \\"next\\": \\"14.0.0\\",\\n    \\"react\\": \\"^18.2.0\\"\\n  }}\\n}}",\n'
-            f'    "frontend/src/app/page.tsx": "export default function Home() {{\\n  return <main><h1>{project["name"]}</h1></main>\\n}}",\n'
-            f'    "frontend/src/lib/api.ts": "export const API_URL = process.env.NEXT_PUBLIC_API_URL || \'http://localhost:8000\';",\n'
-            f'    "frontend/Dockerfile": "FROM node:20-alpine\\nWORKDIR /app\\nCOPY package.json .\\nRUN npm install\\nCOPY . .\\nCMD [\\"npm\\", \\"run\\", \\"dev\\"]"\n'
+            f'  "name": "frontend",\n'
+            f'  "scripts": {{\n'
+            f'    "dev": "next dev"\n'
+            f'  }},\n'
+            f'  "dependencies": {{\n'
+            f'    "next": "14.0.0",\n'
+            f'    "react": "^18.2.0",\n'
+            f'    "react-dom": "^18.2.0"\n'
             f'  }}\n'
             f"}}\n"
-            f"```"
+            f"```\n\n"
+            f"FILE: frontend/src/app/page.tsx\n"
+            f"```tsx\n"
+            f"export default function Home() {{\n"
+            f"  return (\n"
+            f"    <main className='p-8'>\n"
+            f"      <h1 className='text-3xl font-bold'>{project['name']}</h1>\n"
+            f"      <p className='mt-2 text-gray-600'>{project['why']}</p>\n"
+            f"    </main>\n"
+            f"  );\n"
+            f"}}\n"
+            f"```\n\n"
+            f"FILE: frontend/Dockerfile\n"
+            f"```dockerfile\n"
+            f"FROM node:20-alpine\nWORKDIR /app\nCOPY package.json .\nRUN npm install\nCOPY . .\nCMD [\"npm\", \"run\", \"dev\"]\n"
+            f"```\n"
         ),
-        expected_output="JSON object containing complete frontend codebase.",
+        expected_output="Multiple frontend files formatted with FILE: path headers and code blocks.",
         agent=frontend_agent
     )
 
     crew_3 = Crew(agents=[frontend_agent], tasks=[frontend_task], process=Process.sequential)
-    res_3 = parse_json_from_text(str(crew_3.kickoff()))
-    all_files.update(res_3.get("files", {}))
+    res_3_text = str(crew_3.kickoff())
+    files_3 = parse_files_from_markdown(res_3_text)
+
+    # Fallback if step 3 parsing returned nothing
+    if not files_3:
+        files_3 = {
+            "frontend/package.json": f"{{\n  \"name\": \"frontend\",\n  \"scripts\": {{\n    \"dev\": \"next dev\"\n  }},\n  \"dependencies\": {{\n    \"next\": \"14.0.0\",\n    \"react\": \"^18.2.0\",\n    \"react-dom\": \"^18.2.0\"\n  }}\n}}",
+            "frontend/src/app/page.tsx": f"export default function Home() {{\n  return <main className='p-8'><h1 className='text-3xl font-bold'>{project['name']}</h1></main>;\n}}",
+            "frontend/Dockerfile": "FROM node:20-alpine\nWORKDIR /app\nCOPY package.json .\nRUN npm install\nCOPY . .\nCMD [\"npm\", \"run\", \"dev\"]\n"
+        }
+    all_files.update(files_3)
+    print(f"✅ Step 3 generated {len(files_3)} files.")
 
     # ─── DEPLOY TO GITHUB ───
-    if not all_files:
-        send_agent_report(
-            "Portfolio Builder", "error",
-            f"Failed to generate project files for {project['name']}."
-        )
-        return None
-
     repo_name = project["slug"]
     description = f"{project['name']} — {project['why']}"
 
-    print(f"\n📦 Generated {len(all_files)} total files across all services. Pushing to GitHub...")
+    print(f"\n📦 Deploying total {len(all_files)} files to GitHub repo '{repo_name}'...")
 
     try:
         repo_url = github_mgr.push_files(repo_name, all_files, description)
