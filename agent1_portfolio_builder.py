@@ -3,7 +3,7 @@ import re
 import json
 import litellm
 from dotenv import load_dotenv
-
+import subprocess
 load_dotenv()
 
 # Force LiteLLM to drop parameters unsupported by Groq
@@ -355,7 +355,7 @@ def run_portfolio_builder():
 
     try:
         repo_url = github_mgr.push_files(repo_name, all_files, description)
-
+        trigger_verify(repo_name)
         history["built_projects"].append(project["slug"])
         save_history(history)
 
@@ -378,6 +378,22 @@ def run_portfolio_builder():
         print(f"❌ Error: {e}")
         return None
 
+
+
+def trigger_verify(repo_name: str):
+    """Trigger Level-2 CI verification on the generated repo."""
+    try:
+        subprocess.run(
+            [
+                "gh", "workflow", "run", "verify-project.yml",
+                "-f", f"target_repo={repo_name}",
+                "-f", "attempt=1",
+            ],
+            check=False,
+        )
+        print(f"🚀 Triggered verify-project for {repo_name}")
+    except Exception as e:
+        print(f"Could not trigger verify workflow: {e}")
 
 if __name__ == "__main__":
     run_portfolio_builder()

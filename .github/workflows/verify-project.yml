@@ -1,0 +1,172 @@
+name: Verify Generated Project
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: "Repo name to verify (e.g. url-shortener-analytics)"
+        required: true
+      attempt:
+        description: "Repair attempt number"
+        required: false
+        default: "1"
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      status: ${{ steps.result.outputs.status }}
+      logs: ${{ steps.result.outputs.logs }}
+
+    steps:
+      - name: Checkout harness
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Clone target project repo
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_USERNAME: ${{ secrets.GH_USERNAME }}
+        run: |
+          git clone https://x-access-token:${GH_TOKEN}@github.com/${GH_USERNAME}/${{ inputs.target_repo }}.git target_project
+          echo "Cloned ${{ inputs.target_repo }}"
+
+      - name: Verify backend
+        id: backend
+        working-directory: target_project
+        run: |
+          set -o pipefail
+          mkdir -p /tmp/verify
+          echo "=== BACKEND VERIFY ===" | tee /tmp/verify/backend.log
+
+          if [ -d backend ]; then
+            cd backend
+            python -m venv .venv
+            source .venv/bin/activate
+            pip install --upgrade pip
+
+            if [ -f requirements.txt ]; then
+              # Prefer flexible install for CI reliability
+              pip install fastapi "uvicorn[standard]" pydantic python-dotenv websockets || true
+              pip install -r requirements.txt 2>&1 | tee -a /tmp/verify/backend.log || true
+            else
+              pip install fastapi "uvicorn[standard]" pydantic python-dotenv websockets
+            fi
+
+            # syntax check all python files
+            find . -name "*.py" -print0 | xargs -0 -n1 python -m py_compile 2>&1 | tee -a /tmp/verify/backend.log
+
+            # ensure no relative imports in top-level main if present
+            if [ -f main.py ]; then
+              if grep -n "from \." main.py; then
+                echo "Relative import found in main.py" | tee -a /tmp/verify/backend.log
+                exit 1
+              fi
+              python - <<'PY' 2>&1 | tee -a /tmp/verify/backend.log
+          import importlib.util, sys
+          spec = importlib.util.spec_from_file_location("main", "main.py")
+          mod = importlib.util.module_from_spec(spec)
+          # don't execute network servers; just compile-load safely if possible
+          print("main.py present and compile-checked")
+          PY
+            fi
+          else
+            echo "No backend/ folder" | tee -a /tmp/verify/backend.log
+          fi
+
+      - name: Verify frontend
+        id: frontend
+        working-directory: target_project
+        run: |
+          set -o pipefail
+          echo "=== FRONTEND VERIFY ===" | tee /tmp/verify/frontend.log
+
+          if [ -d frontend ]; then
+            cd frontend
+
+            if [ ! -f package.json ]; then
+              echo "frontend/package.json missing" | tee -a /tmp/verify/frontend.log
+              exit 1
+            fi
+
+            # block known hallucinated packages quickly
+            if grep -E 'yjs-react|react-yjs|fastapi-websockets-sync' package.json; then
+              echo "Hallucinated package detected in package.json" | tee -a /tmp/verify/frontend.log
+              exit 1
+            fi
+
+            npm install 2>&1 | tee -a /tmp/verify/frontend.log
+            npm run build 2>&1 | tee -a /tmp/verify/frontend.log
+          else
+            echo "No frontend/ folder" | tee -a /tmp/verify/frontend.log
+          fi
+
+      - name: Collect result
+        id: result
+        if: always()
+        run: |
+          BACKEND_LOG=$(cat /tmp/verify/backend.log 2>/dev/null || echo "no backend log")
+          FRONTEND_LOG=$(cat /tmp/verify/frontend.log 2>/dev/null || echo "no frontend log")
+          FULL_LOG=$(printf "%s\n%s\n" "$BACKEND_LOG" "$FRONTEND_LOG")
+
+          # GitHub output size guard
+          TRIMMED=$(echo "$FULL_LOG" | tail -n 200)
+
+          if [ "${{ steps.backend.outcome }}" = "success" ] && [ "${{ steps.frontend.outcome }}" = "success" ]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "status=failed" >> $GITHUB_OUTPUT
+          fi
+
+          {
+            echo "logs<<EOF"
+            echo "$TRIMMED"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+          echo "$TRIMMED" > verify_logs.txt
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-logs-${{ inputs.target_repo }}-${{ inputs.attempt }}
+          path: verify_logs.txt
+
+      - name: Trigger repair if failed
+        if: always() && steps.result.outputs.status == 'failed' && inputs.attempt < '3'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          NEXT_ATTEMPT=$(( ${{ inputs.attempt }} + 1 ))
+          gh workflow run repair-project.yml \
+            -f target_repo='${{ inputs.target_repo }}' \
+            -f attempt="$NEXT_ATTEMPT" \
+            -f error_logs='${{ steps.result.outputs.logs }}'
+
+      - name: Notify Telegram
+        if: always()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          STATUS='${{ steps.result.outputs.status }}'
+          MSG="Project Verify: ${{ inputs.target_repo }}
+          Attempt: ${{ inputs.attempt }}
+          Status: $STATUS"
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d text="$MSG"
