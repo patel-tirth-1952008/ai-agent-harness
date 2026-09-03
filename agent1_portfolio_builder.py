@@ -6,10 +6,32 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Force LiteLLM to drop parameters unsupported by Groq (like cache_breakpoint)
+# ─── MONKEYPATCH LITELLM TO STRIP UNSUPPORTED GROQ PARAMS ───
 litellm.drop_params = True
 os.environ["LITELLM_DROP_PARAMS"] = "true"
 
+def _clean_messages(kwargs):
+    if "messages" in kwargs and isinstance(kwargs["messages"], list):
+        for msg in kwargs["messages"]:
+            if isinstance(msg, dict):
+                msg.pop("cache_breakpoint", None)
+                msg.pop("cache_control", None)
+
+_orig_completion = litellm.completion
+_orig_acompletion = litellm.acompletion
+
+def _patched_completion(*args, **kwargs):
+    _clean_messages(kwargs)
+    return _orig_completion(*args, **kwargs)
+
+async def _patched_acompletion(*args, **kwargs):
+    _clean_messages(kwargs)
+    return await _orig_acompletion(*args, **kwargs)
+
+litellm.completion = _patched_completion
+litellm.acompletion = _patched_acompletion
+
+# ─── ENV VARS ───
 os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY", "")
 os.environ["SERPER_API_KEY"] = os.getenv("SERPER_API_KEY", "")
 
@@ -26,10 +48,14 @@ from github_manager import github_mgr
 
 
 def get_llm(temperature=0.2):
-    """Uses CrewAI's native LLM wrapper for Groq with params dropping enabled."""
-    model_name = GROQ_MODEL if GROQ_MODEL.startswith("groq/") else f"groq/{GROQ_MODEL}"
+    """
+    Routes Groq through OpenAI compatible endpoint format.
+    This prevents LiteLLM from injecting Groq-incompatible parameters like cache_breakpoint.
+    """
+    clean_model = GROQ_MODEL.replace("groq/", "").replace("openai/", "")
     return LLM(
-        model=model_name,
+        model=f"openai/{clean_model}",
+        base_url="https://api.groq.com/openai/v1",
         api_key=GROQ_API_KEY,
         temperature=temperature
     )
