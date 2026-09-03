@@ -3,8 +3,9 @@ langchain-groq
 langchain-core
 crewai
 crewai-tools
+litellm
 PyGithub
 python-dotenv
 requests
 schedule
-beautifulsoup4 
+beautifulsoup4

@@ -23,10 +23,10 @@ LINKEDIN_EMAIL = os.getenv("LINKEDIN_EMAIL", "")
 LINKEDIN_PASSWORD = os.getenv("LINKEDIN_PASSWORD", "")
 
 # ─── SAFETY LIMITS ───
-MAX_API_CALLS_PER_DAY = 200      # Increased from 100
-MAX_API_CALLS_PER_RUN = 40       # Increased from 15 (needed for 4 agents × ~10 calls)
-MAX_AGENT_ITERATIONS = 8         # Increased from 5
-MAX_AGENT_RPM = 15               # Increased from 10
+MAX_API_CALLS_PER_DAY = 200
+MAX_API_CALLS_PER_RUN = 40
+MAX_AGENT_ITERATIONS = 8
+MAX_AGENT_RPM = 15
 
 # ─── DYNAMIC GROQ MODEL SELECTOR ───
 def get_best_groq_model():
@@ -47,15 +47,13 @@ def get_best_groq_model():
             active_models = [m["id"] for m in response.json().get("data", [])]
             print(f"🔍 Found active Groq models: {active_models}")
 
-            # Prioritize larger, more capable models for code generation
+            # Standard Groq chat models compatible with LiteLLM
             preferred_order = [
-                "openai/gpt-oss-120b",           # 120B params — best for code
-                "qwen/qwen3.8-27b",              # 27B — very strong
-                "qwen/qwen3.6-27b",              # 27B fallback
-                "openai/gpt-oss-20b",            # 20B fallback
                 "llama-3.3-70b-versatile",
                 "llama-3.1-70b-versatile",
                 "llama-3.1-8b-instant",
+                "mixtral-8x7b-32768",
+                "gemma2-9b-it"
             ]
 
             for model in preferred_order:
@@ -63,8 +61,10 @@ def get_best_groq_model():
                     print(f"✅ Selected optimal model: {model}")
                     return model
             
-            if active_models:
-                return active_models[0]
+            # Fallback to any active non-whisper model
+            chat_models = [m for m in active_models if "whisper" not in m and "guard" not in m]
+            if chat_models:
+                return chat_models[0]
     except Exception as e:
         print(f"⚠️ Could not fetch Groq models dynamically: {e}")
         
@@ -74,7 +74,7 @@ def get_best_groq_model():
 GROQ_MODEL = get_best_groq_model()
 
 # ─── SCHEDULE TIMES ───
-PORTFOLIO_BUILD_DAY = "monday"
+PORTFOLIO_BUILD_DAY = "every_3_days"
 PORTFOLIO_BUILD_TIME = "03:00"
 LEETCODE_SOLVE_TIME = "02:00"
 FREELANCE_SEARCH_TIME = "08:00"
