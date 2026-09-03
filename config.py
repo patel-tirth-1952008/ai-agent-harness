@@ -30,10 +30,12 @@ MAX_AGENT_RPM = 15
 
 # ─── DYNAMIC GROQ MODEL SELECTOR ───
 def get_best_groq_model():
-    """Queries Groq API to automatically pick the best active model."""
+    """Queries Groq API to select proven general text chat models."""
     api_key = GROQ_API_KEY
+    default_model = "llama-3.1-8b-instant"
+    
     if not api_key:
-        return "llama-3.1-8b-instant"
+        return default_model
     
     url = "https://api.groq.com/openai/v1/models"
     headers = {
@@ -41,34 +43,49 @@ def get_best_groq_model():
         "Content-Type": "application/json"
     }
     
+    # Priority list of verified general-purpose text chat models on Groq
+    preferred_order = [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-70b-versatile",
+        "llama-3.1-8b-instant",
+        "qwen/qwen3.8-27b",
+        "qwen/qwen3.6-27b",
+        "mixtral-8x7b-32768",
+        "gemma2-9b-it"
+    ]
+    
     try:
         response = requests.get(url, headers=headers, timeout=5)
         if response.status_code == 200:
-            active_models = [m["id"] for m in response.json().get("data", [])]
-            print(f"🔍 Found active Groq models: {active_models}")
+            models_data = response.json().get("data", [])
+            active_ids = [m["id"] for m in models_data]
+            print(f"🔍 Found active Groq models: {active_ids}")
 
-            # Standard Groq chat models compatible with LiteLLM
-            preferred_order = [
-                "llama-3.3-70b-versatile",
-                "llama-3.1-70b-versatile",
-                "llama-3.1-8b-instant",
-                "mixtral-8x7b-32768",
-                "gemma2-9b-it"
-            ]
-
+            # 1. Try preferred models first
             for model in preferred_order:
-                if model in active_models:
+                if model in active_ids:
                     print(f"✅ Selected optimal model: {model}")
                     return model
             
-            # Fallback to any active non-whisper model
-            chat_models = [m for m in active_models if "whisper" not in m and "guard" not in m]
-            if chat_models:
-                return chat_models[0]
+            # 2. Strictly filter out audio, guard, specialized, and restricted models
+            invalid_keywords = [
+                "whisper", "guard", "canopylabs", "orpheus", 
+                "allam", "safeguard", "compound", "vision", "embed"
+            ]
+            valid_chat_models = [
+                m for m in active_ids 
+                if not any(kw in m.lower() for kw in invalid_keywords)
+            ]
+            
+            if valid_chat_models:
+                print(f"✅ Selected fallback chat model: {valid_chat_models[0]}")
+                return valid_chat_models[0]
+                
     except Exception as e:
         print(f"⚠️ Could not fetch Groq models dynamically: {e}")
         
-    return "llama-3.1-8b-instant"
+    print(f"✅ Defaulting to reliable model: {default_model}")
+    return default_model
 
 # Auto-detect best model at startup
 GROQ_MODEL = get_best_groq_model()
