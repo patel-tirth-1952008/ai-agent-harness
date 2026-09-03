@@ -28,7 +28,7 @@ MAX_AGENT_ITERATIONS = 5
 MAX_AGENT_RPM = 10
 
 # ─── GROQ MODEL ───
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_MODEL = "llama-3.1-8b-instant"
 
 # ─── SCHEDULE TIMES ───
 PORTFOLIO_BUILD_DAY = "monday"
