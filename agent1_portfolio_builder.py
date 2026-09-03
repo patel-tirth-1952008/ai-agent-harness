@@ -1,9 +1,14 @@
 import os
 import re
 import json
+import litellm
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Force LiteLLM to drop parameters unsupported by Groq (like cache_breakpoint)
+litellm.drop_params = True
+os.environ["LITELLM_DROP_PARAMS"] = "true"
 
 os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY", "")
 os.environ["SERPER_API_KEY"] = os.getenv("SERPER_API_KEY", "")
@@ -21,7 +26,7 @@ from github_manager import github_mgr
 
 
 def get_llm(temperature=0.2):
-    """Uses CrewAI's native LLM wrapper for Groq."""
+    """Uses CrewAI's native LLM wrapper for Groq with params dropping enabled."""
     model_name = GROQ_MODEL if GROQ_MODEL.startswith("groq/") else f"groq/{GROQ_MODEL}"
     return LLM(
         model=model_name,

@@ -74,13 +74,16 @@ jobs:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GITHUB_USERNAME: ${{ secrets.GH_USERNAME }}
+          GH_USERNAME: ${{ secrets.GH_USERNAME }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           YOUR_NAME: ${{ secrets.YOUR_NAME }}
           YOUR_SKILLS: ${{ secrets.YOUR_SKILLS }}
           YOUR_EXPERIENCE_YEARS: ${{ secrets.YOUR_EXPERIENCE_YEARS }}
           YOUR_RESUME_SUMMARY: ${{ secrets.YOUR_RESUME_SUMMARY }}
+          LITELLM_DROP_PARAMS: "true" # <--- Added this to strip unsupported Groq params
         run: |
           python run_once.py ${{ env.TARGET_AGENT }}
 
