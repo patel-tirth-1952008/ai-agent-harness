@@ -1,45 +1,207 @@
 {
   "problems": [
-    {"title": "Two Sum", "difficulty": "Easy", "number": 1},
-    {"title": "Add Two Numbers", "difficulty": "Medium", "number": 2},
-    {"title": "Longest Substring Without Repeating Characters", "difficulty": "Medium", "number": 3},
-    {"title": "Median of Two Sorted Arrays", "difficulty": "Hard", "number": 4},
-    {"title": "Longest Palindromic Substring", "difficulty": "Medium", "number": 5},
-    {"title": "Reverse Integer", "difficulty": "Medium", "number": 7},
-    {"title": "Container With Most Water", "difficulty": "Medium", "number": 11},
-    {"title": "3Sum", "difficulty": "Medium", "number": 15},
-    {"title": "Valid Parentheses", "difficulty": "Easy", "number": 20},
-    {"title": "Merge Two Sorted Lists", "difficulty": "Easy", "number": 21},
-    {"title": "Merge k Sorted Lists", "difficulty": "Hard", "number": 23},
-    {"title": "Search in Rotated Sorted Array", "difficulty": "Medium", "number": 33},
-    {"title": "Combination Sum", "difficulty": "Medium", "number": 39},
-    {"title": "Trapping Rain Water", "difficulty": "Hard", "number": 42},
-    {"title": "Maximum Subarray", "difficulty": "Medium", "number": 53},
-    {"title": "Jump Game", "difficulty": "Medium", "number": 55},
-    {"title": "Merge Intervals", "difficulty": "Medium", "number": 56},
-    {"title": "Climbing Stairs", "difficulty": "Easy", "number": 70},
-    {"title": "Word Search", "difficulty": "Medium", "number": 79},
-    {"title": "Best Time to Buy and Sell Stock", "difficulty": "Easy", "number": 121},
-    {"title": "Binary Tree Maximum Path Sum", "difficulty": "Hard", "number": 124},
-    {"title": "Longest Consecutive Sequence", "difficulty": "Medium", "number": 128},
-    {"title": "Word Break", "difficulty": "Medium", "number": 139},
-    {"title": "LRU Cache", "difficulty": "Medium", "number": 146},
-    {"title": "House Robber", "difficulty": "Medium", "number": 198},
-    {"title": "Number of Islands", "difficulty": "Medium", "number": 200},
-    {"title": "Course Schedule", "difficulty": "Medium", "number": 207},
-    {"title": "Word Search II", "difficulty": "Hard", "number": 212},
-    {"title": "Sliding Window Maximum", "difficulty": "Hard", "number": 239},
-    {"title": "Product of Array Except Self", "difficulty": "Medium", "number": 238},
-    {"title": "Serialize and Deserialize Binary Tree", "difficulty": "Hard", "number": 297},
-    {"title": "Coin Change", "difficulty": "Medium", "number": 322},
-    {"title": "Top K Frequent Elements", "difficulty": "Medium", "number": 347},
-    {"title": "Design Twitter", "difficulty": "Medium", "number": 355},
-    {"title": "Decode String", "difficulty": "Medium", "number": 394},
-    {"title": "Longest Increasing Subsequence", "difficulty": "Medium", "number": 300},
-    {"title": "Pacific Atlantic Water Flow", "difficulty": "Medium", "number": 417},
-    {"title": "Target Sum", "difficulty": "Medium", "number": 494},
-    {"title": "Daily Temperatures", "difficulty": "Medium", "number": 739},
-    {"title": "Min Cost Climbing Stairs", "difficulty": "Easy", "number": 746}
+    {
+      "title": "Two Sum",
+      "difficulty": "Easy",
+      "number": 1
+    },
+    {
+      "title": "Add Two Numbers",
+      "difficulty": "Medium",
+      "number": 2
+    },
+    {
+      "title": "Longest Substring Without Repeating Characters",
+      "difficulty": "Medium",
+      "number": 3
+    },
+    {
+      "title": "Median of Two Sorted Arrays",
+      "difficulty": "Hard",
+      "number": 4
+    },
+    {
+      "title": "Longest Palindromic Substring",
+      "difficulty": "Medium",
+      "number": 5
+    },
+    {
+      "title": "Reverse Integer",
+      "difficulty": "Medium",
+      "number": 7
+    },
+    {
+      "title": "Container With Most Water",
+      "difficulty": "Medium",
+      "number": 11
+    },
+    {
+      "title": "3Sum",
+      "difficulty": "Medium",
+      "number": 15
+    },
+    {
+      "title": "Valid Parentheses",
+      "difficulty": "Easy",
+      "number": 20
+    },
+    {
+      "title": "Merge Two Sorted Lists",
+      "difficulty": "Easy",
+      "number": 21
+    },
+    {
+      "title": "Merge k Sorted Lists",
+      "difficulty": "Hard",
+      "number": 23
+    },
+    {
+      "title": "Search in Rotated Sorted Array",
+      "difficulty": "Medium",
+      "number": 33
+    },
+    {
+      "title": "Combination Sum",
+      "difficulty": "Medium",
+      "number": 39
+    },
+    {
+      "title": "Trapping Rain Water",
+      "difficulty": "Hard",
+      "number": 42
+    },
+    {
+      "title": "Maximum Subarray",
+      "difficulty": "Medium",
+      "number": 53
+    },
+    {
+      "title": "Jump Game",
+      "difficulty": "Medium",
+      "number": 55
+    },
+    {
+      "title": "Merge Intervals",
+      "difficulty": "Medium",
+      "number": 56
+    },
+    {
+      "title": "Climbing Stairs",
+      "difficulty": "Easy",
+      "number": 70
+    },
+    {
+      "title": "Word Search",
+      "difficulty": "Medium",
+      "number": 79
+    },
+    {
+      "title": "Best Time to Buy and Sell Stock",
+      "difficulty": "Easy",
+      "number": 121
+    },
+    {
+      "title": "Binary Tree Maximum Path Sum",
+      "difficulty": "Hard",
+      "number": 124
+    },
+    {
+      "title": "Longest Consecutive Sequence",
+      "difficulty": "Medium",
+      "number": 128
+    },
+    {
+      "title": "Word Break",
+      "difficulty": "Medium",
+      "number": 139
+    },
+    {
+      "title": "LRU Cache",
+      "difficulty": "Medium",
+      "number": 146
+    },
+    {
+      "title": "House Robber",
+      "difficulty": "Medium",
+      "number": 198
+    },
+    {
+      "title": "Number of Islands",
+      "difficulty": "Medium",
+      "number": 200
+    },
+    {
+      "title": "Course Schedule",
+      "difficulty": "Medium",
+      "number": 207
+    },
+    {
+      "title": "Word Search II",
+      "difficulty": "Hard",
+      "number": 212
+    },
+    {
+      "title": "Sliding Window Maximum",
+      "difficulty": "Hard",
+      "number": 239
+    },
+    {
+      "title": "Product of Array Except Self",
+      "difficulty": "Medium",
+      "number": 238
+    },
+    {
+      "title": "Serialize and Deserialize Binary Tree",
+      "difficulty": "Hard",
+      "number": 297
+    },
+    {
+      "title": "Coin Change",
+      "difficulty": "Medium",
+      "number": 322
+    },
+    {
+      "title": "Top K Frequent Elements",
+      "difficulty": "Medium",
+      "number": 347
+    },
+    {
+      "title": "Design Twitter",
+      "difficulty": "Medium",
+      "number": 355
+    },
+    {
+      "title": "Decode String",
+      "difficulty": "Medium",
+      "number": 394
+    },
+    {
+      "title": "Longest Increasing Subsequence",
+      "difficulty": "Medium",
+      "number": 300
+    },
+    {
+      "title": "Pacific Atlantic Water Flow",
+      "difficulty": "Medium",
+      "number": 417
+    },
+    {
+      "title": "Target Sum",
+      "difficulty": "Medium",
+      "number": 494
+    },
+    {
+      "title": "Daily Temperatures",
+      "difficulty": "Medium",
+      "number": 739
+    },
+    {
+      "title": "Min Cost Climbing Stairs",
+      "difficulty": "Easy",
+      "number": 746
+    }
   ],
-  "solved": []
+  "solved": [
+    "Two Sum"
+  ]
 }
