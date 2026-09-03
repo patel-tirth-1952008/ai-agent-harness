@@ -1,0 +1,10 @@
+groq
+langchain-groq
+langchain-core
+crewai
+crewai-tools
+PyGithub
+python-dotenv
+requests
+schedule
+beautifulsoup4 

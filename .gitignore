@@ -1,0 +1,6 @@
+.env
+venv/
+__pycache__/
+*.pyc
+data/limiter_state.json
+*.log
