@@ -23,10 +23,10 @@ LINKEDIN_EMAIL = os.getenv("LINKEDIN_EMAIL", "")
 LINKEDIN_PASSWORD = os.getenv("LINKEDIN_PASSWORD", "")
 
 # ─── SAFETY LIMITS ───
-MAX_API_CALLS_PER_DAY = 100
-MAX_API_CALLS_PER_RUN = 15
-MAX_AGENT_ITERATIONS = 5
-MAX_AGENT_RPM = 10
+MAX_API_CALLS_PER_DAY = 200      # Increased from 100
+MAX_API_CALLS_PER_RUN = 40       # Increased from 15 (needed for 4 agents × ~10 calls)
+MAX_AGENT_ITERATIONS = 8         # Increased from 5
+MAX_AGENT_RPM = 15               # Increased from 10
 
 # ─── DYNAMIC GROQ MODEL SELECTOR ───
 def get_best_groq_model():
@@ -47,14 +47,15 @@ def get_best_groq_model():
             active_models = [m["id"] for m in response.json().get("data", [])]
             print(f"🔍 Found active Groq models: {active_models}")
 
-            # Preferred priority list for coding & reasoning
+            # Prioritize larger, more capable models for code generation
             preferred_order = [
+                "openai/gpt-oss-120b",           # 120B params — best for code
+                "qwen/qwen3.8-27b",              # 27B — very strong
+                "qwen/qwen3.6-27b",              # 27B fallback
+                "openai/gpt-oss-20b",            # 20B fallback
                 "llama-3.3-70b-versatile",
                 "llama-3.1-70b-versatile",
-                "deepseek-r1-distill-llama-70b",
                 "llama-3.1-8b-instant",
-                "mixtral-8x7b-32768",
-                "gemma2-9b-it"
             ]
 
             for model in preferred_order:
