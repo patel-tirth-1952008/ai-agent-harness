@@ -36,7 +36,6 @@ os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY", "")
 os.environ["SERPER_API_KEY"] = os.getenv("SERPER_API_KEY", "")
 
 from crewai import Agent, Task, Crew, Process, LLM
-from crewai_tools import SerperDevTool
 from config import (
     GROQ_API_KEY, GROQ_MODEL,
     MAX_AGENT_ITERATIONS, MAX_AGENT_RPM,
@@ -48,10 +47,7 @@ from github_manager import github_mgr
 
 
 def get_llm(temperature=0.2):
-    """
-    Routes Groq through OpenAI compatible endpoint format.
-    This prevents LiteLLM from injecting Groq-incompatible parameters like cache_breakpoint.
-    """
+    """Routes Groq safely through OpenAI-compatible endpoint format."""
     clean_model = GROQ_MODEL.replace("groq/", "").replace("openai/", "")
     return LLM(
         model=f"openai/{clean_model}",
@@ -74,68 +70,50 @@ def save_history(history):
         json.dump(history, f, indent=2)
 
 
-# ─── HIGH-VALUE PROJECT IDEAS ───
+# ─── HIGH-VALUE INDUSTRY PROJECTS ───
 INDUSTRY_PROJECTS = [
     {
         "slug": "realtime-collaborative-editor",
         "name": "Real-time Collaborative Document Editor",
-        "why": "Google Docs clone. Tests WebSockets, CRDTs, real-time sync. Asked at Google, Notion, Figma.",
-        "stack": "Next.js 14, TypeScript, Socket.io, Node.js, PostgreSQL, Redis, Docker"
+        "why": "Google Docs clone. Tests WebSockets, real-time sync, and concurrency.",
+        "stack": "Next.js 14, TypeScript, FastAPI, WebSockets, PostgreSQL, Redis, Docker"
     },
     {
         "slug": "url-shortener-analytics",
         "name": "URL Shortener with Analytics Dashboard",
-        "why": "Bit.ly clone. Tests system design, caching, rate limiting, analytics. Classic Amazon/Meta interview project.",
+        "why": "Bit.ly clone. Tests system design, caching, rate limiting, and analytics.",
         "stack": "FastAPI, PostgreSQL, Redis, React, TypeScript, Chart.js, Docker"
     },
     {
         "slug": "ecommerce-microservices",
-        "name": "E-commerce Platform with Microservices",
-        "why": "Amazon-scale architecture. Tests microservices, message queues, payment integration.",
-        "stack": "Node.js, Express, MongoDB, RabbitMQ, Stripe, React, Docker"
+        "name": "E-commerce Platform Architecture",
+        "why": "Amazon-scale architecture. Tests services, authentication, and payments.",
+        "stack": "Node.js, Express, MongoDB, Redis, Stripe API, React, Docker"
     },
     {
         "slug": "job-board-with-search",
-        "name": "Job Board with Advanced Search & Filters",
-        "why": "LinkedIn clone. Tests full-text search, pagination, complex queries.",
-        "stack": "Next.js, FastAPI, PostgreSQL, Elasticsearch, Redis, Docker, JWT Auth"
+        "name": "Job Board with Advanced Filters",
+        "why": "LinkedIn clone. Tests complex queries, authentication, and UI state.",
+        "stack": "Next.js, FastAPI, PostgreSQL, Redis, Docker, JWT Auth"
     },
     {
         "slug": "chat-application",
-        "name": "Real-time Chat Application with Groups",
-        "why": "WhatsApp/Slack clone. Tests WebSockets, message delivery, notifications, file uploads.",
-        "stack": "Next.js, Socket.io, Node.js, PostgreSQL, Redis, AWS S3 mock, Docker"
+        "name": "Real-time Chat Platform",
+        "why": "WhatsApp/Slack clone. Tests WebSockets, room management, and messaging.",
+        "stack": "Next.js, Socket.io, Node.js, PostgreSQL, Redis, Docker"
     },
     {
         "slug": "task-management-saas",
         "name": "Task Management SaaS (Trello Clone)",
-        "why": "Tests drag-and-drop UI, real-time collaboration, team features, permissions.",
-        "stack": "React, TypeScript, DnD Kit, FastAPI, PostgreSQL, Redis, Docker"
-    },
-    {
-        "slug": "video-streaming-platform",
-        "name": "Video Streaming Platform",
-        "why": "YouTube clone. Tests file uploads, video processing, streaming, CDN concepts.",
-        "stack": "Next.js, Node.js, MongoDB, FFmpeg concepts, AWS S3 mock, Docker"
-    },
-    {
-        "slug": "food-delivery-app",
-        "name": "Food Delivery Application",
-        "why": "Uber Eats clone. Tests geolocation, real-time tracking, payment flow, multi-role auth.",
-        "stack": "Next.js, FastAPI, PostgreSQL, Redis, Mapbox, Stripe, Docker"
-    },
-    {
-        "slug": "social-media-feed",
-        "name": "Social Media Platform with Feed Algorithm",
-        "why": "Twitter/Instagram clone. Tests feed generation, followers, likes, media uploads.",
-        "stack": "Next.js, FastAPI, PostgreSQL, Redis, Celery, Docker"
+        "why": "Tests drag-and-drop UI, state management, and team permissions.",
+        "stack": "React, TypeScript, FastAPI, PostgreSQL, Redis, Docker"
     },
     {
         "slug": "banking-api-system",
         "name": "Banking API with Transaction System",
-        "why": "Tests ACID transactions, security, audit logs. High-value for fintech interviews.",
-        "stack": "FastAPI, PostgreSQL, Redis, JWT, bcrypt, pytest, Docker"
-    },
+        "why": "Tests ACID transactions, security, audit logs, and clean backend architecture.",
+        "stack": "FastAPI, PostgreSQL, Redis, JWT, pytest, Docker"
+    }
 ]
 
 
@@ -145,6 +123,23 @@ def pick_next_project(history):
         if project["slug"] not in built:
             return project
     return INDUSTRY_PROJECTS[len(built) % len(INDUSTRY_PROJECTS)]
+
+
+def parse_json_from_text(text):
+    """Safely extracts JSON object from LLM response text."""
+    try:
+        # Match standard json block
+        match = re.search(r'```json\s*(\{[\s\S]*?\})\s*```', text)
+        if match:
+            return json.loads(match.group(1))
+        
+        # Fallback to any curly brace match
+        match = re.search(r'\{[\s\S]*\}', text)
+        if match:
+            return json.loads(match.group(0))
+    except Exception as e:
+        print(f"⚠️ JSON parsing error: {e}")
+    return {}
 
 
 def run_portfolio_builder():
@@ -162,155 +157,128 @@ def run_portfolio_builder():
 
     llm = get_llm()
 
-    # ─── AGENTS ───
-    architect = Agent(
-        role="Principal Software Architect",
-        goal="Design production-grade full-stack systems with proper architecture and best practices.",
-        backstory="You have 20 years of experience architecting scalable systems at Google, Amazon, and Meta.",
+    all_files = {}
+
+    # ─── STEP 1: DEVOPS & DOCS ───
+    print("\n📝 [1/3] Generating Architecture, README & Docker setup...")
+    devops_agent = Agent(
+        role="DevOps Architect and Technical Writer",
+        goal="Create professional README.md, docker-compose.yml, and root files.",
+        backstory="You write clean architecture docs, docker setup, and professional READMEs.",
         llm=llm,
         max_iter=MAX_AGENT_ITERATIONS,
-        max_rpm=MAX_AGENT_RPM,
-        verbose=True,
-    )
-
-    backend_dev = Agent(
-        role="Senior Backend Engineer",
-        goal="Write complete, production-ready backend code with authentication, database, tests, and error handling.",
-        backstory="You write clean backend code handling auth, ORMs, validation, and unit tests.",
-        llm=llm,
-        max_iter=MAX_AGENT_ITERATIONS,
-        max_rpm=MAX_AGENT_RPM,
-        verbose=True,
-    )
-
-    frontend_dev = Agent(
-        role="Senior Frontend Engineer",
-        goal="Build modern, responsive frontends with React/Next.js, state management, and clean UI.",
-        backstory="You build modern UIs using Next.js, TypeScript, and Tailwind CSS.",
-        llm=llm,
-        max_iter=MAX_AGENT_ITERATIONS,
-        max_rpm=MAX_AGENT_RPM,
-        verbose=True,
-    )
-
-    devops_engineer = Agent(
-        role="DevOps Engineer and Technical Writer",
-        goal="Create Docker setup, CI/CD pipelines, and professional documentation.",
-        backstory="You create docker-compose setups, GitHub Actions workflows, and clear READMEs.",
-        llm=llm,
-        max_iter=MAX_AGENT_ITERATIONS,
-        max_rpm=MAX_AGENT_RPM,
-        verbose=True,
-    )
-
-    # ─── TASKS ───
-    architecture_task = Task(
-        description=(
-            f"Design the architecture for: {project['name']}\n"
-            f"Tech stack: {project['stack']}\n\n"
-            f"Output folder tree, database schema, and list of API endpoints."
-        ),
-        expected_output="Architecture specification with folder structure and API endpoints.",
-        agent=architect,
-    )
-
-    backend_task = Task(
-        description=(
-            f"Write backend files for {project['name']} in JSON format:\n\n"
-            f"```json\n"
-            f"{{\n"
-            f'  "files": {{\n'
-            f'    "backend/main.py": "code...",\n'
-            f'    "backend/requirements.txt": "...",\n'
-            f'    "backend/Dockerfile": "..."\n'
-            f'  }}\n'
-            f"}}\n"
-            f"```\n\n"
-            f"Output ONLY valid JSON."
-        ),
-        expected_output="Valid JSON object containing backend files.",
-        agent=backend_dev,
-    )
-
-    frontend_task = Task(
-        description=(
-            f"Write frontend files for {project['name']} in JSON format:\n\n"
-            f"```json\n"
-            f"{{\n"
-            f'  "files": {{\n'
-            f'    "frontend/package.json": "...",\n'
-            f'    "frontend/src/app/page.tsx": "...",\n'
-            f'    "frontend/Dockerfile": "..."\n'
-            f'  }}\n'
-            f"}}\n"
-            f"```\n\n"
-            f"Output ONLY valid JSON."
-        ),
-        expected_output="Valid JSON object containing frontend files.",
-        agent=frontend_dev,
+        verbose=True
     )
 
     devops_task = Task(
         description=(
-            f"Create README.md, docker-compose.yml, and deployment docs for {project['name']}.\n"
-            f"Output JSON format:\n\n"
+            f"Create the core documentation and Docker config for: {project['name']}\n"
+            f"Tech Stack: {project['stack']}\n\n"
+            f"Output strictly inside a JSON block with key 'files':\n"
             f"```json\n"
             f"{{\n"
-            f'  "repo_name": "{project["slug"]}",\n'
-            f'  "description": "Full-stack {project["name"]}",\n'
             f'  "files": {{\n'
-            f'    "README.md": "# {project["name"]}\\n\\n...",\n'
-            f'    "docker-compose.yml": "..."\n'
+            f'    "README.md": "# {project["name"]}\\n\\n## Architecture\\n...\\n\\n## Quick Start\\n```bash\\ndocker-compose up\\n```",\n'
+            f'    "docker-compose.yml": "version: \'3.8\'\\nservices:\\n...",\n'
+            f'    ".gitignore": "__pycache__/\\nnode_modules/\\n.env\\nvenv/",\n'
+            f'    ".github/workflows/ci.yml": "name: CI\\non: [push]\\njobs:\\n..."\n'
             f'  }}\n'
             f"}}\n"
-            f"```\n\n"
-            f"Output ONLY valid JSON."
+            f"```"
         ),
-        expected_output="Valid JSON with repo_name, description, and docs files.",
-        agent=devops_engineer,
+        expected_output="JSON object containing README.md, docker-compose.yml, and CI files.",
+        agent=devops_agent
     )
 
-    # ─── EXECUTE ───
-    try:
-        limiter.check()
+    crew_1 = Crew(agents=[devops_agent], tasks=[devops_task], process=Process.sequential)
+    res_1 = parse_json_from_text(str(crew_1.kickoff()))
+    all_files.update(res_1.get("files", {}))
 
-        crew = Crew(
-            agents=[architect, backend_dev, frontend_dev, devops_engineer],
-            tasks=[architecture_task, backend_task, frontend_task, devops_task],
-            process=Process.sequential,
-            verbose=True,
+    # ─── STEP 2: BACKEND CODE ───
+    print("\n⚙️ [2/3] Generating Production Backend Code...")
+    backend_agent = Agent(
+        role="Senior Backend Engineer",
+        goal="Write full backend application code, models, routes, and Dockerfile.",
+        backstory="You build complete Python/FastAPI or Node.js APIs with authentication, database ORM, and error handling.",
+        llm=llm,
+        max_iter=MAX_AGENT_ITERATIONS,
+        verbose=True
+    )
+
+    backend_task = Task(
+        description=(
+            f"Write the backend service files for: {project['name']}\n"
+            f"Tech Stack: {project['stack']}\n\n"
+            f"Output strictly inside a JSON block with key 'files':\n"
+            f"```json\n"
+            f"{{\n"
+            f'  "files": {{\n'
+            f'    "backend/main.py": "from fastapi import FastAPI\\n...",\n'
+            f'    "backend/config.py": "...",\n'
+            f'    "backend/database.py": "...",\n'
+            f'    "backend/requirements.txt": "fastapi\\nuvicorn\\npydantic\\nsqlalchemy\\npsycopg2-binary\\npython-dotenv",\n'
+            f'    "backend/Dockerfile": "FROM python:3.11-slim\\nWORKDIR /app\\nCOPY requirements.txt .\\nRUN pip install -r requirements.txt\\nCOPY . .\\nCMD [\\"uvicorn\\", \\"main:app\\", \\"--host\\", \\"0.0.0.0\\", \\"--port\\", \\"8000\\"]"\n'
+            f'  }}\n'
+            f"}}\n"
+            f"```"
+        ),
+        expected_output="JSON object containing complete backend codebase.",
+        agent=backend_agent
+    )
+
+    crew_2 = Crew(agents=[backend_agent], tasks=[backend_task], process=Process.sequential)
+    res_2 = parse_json_from_text(str(crew_2.kickoff()))
+    all_files.update(res_2.get("files", {}))
+
+    # ─── STEP 3: FRONTEND CODE ───
+    print("\n🎨 [3/3] Generating Modern Frontend Code...")
+    frontend_agent = Agent(
+        role="Senior Frontend Engineer",
+        goal="Build modern Next.js/React UI code, pages, and components.",
+        backstory="You write clean TypeScript and React components with responsive layout.",
+        llm=llm,
+        max_iter=MAX_AGENT_ITERATIONS,
+        verbose=True
+    )
+
+    frontend_task = Task(
+        description=(
+            f"Write the frontend web application files for: {project['name']}\n"
+            f"Tech Stack: {project['stack']}\n\n"
+            f"Output strictly inside a JSON block with key 'files':\n"
+            f"```json\n"
+            f"{{\n"
+            f'  "files": {{\n'
+            f'    "frontend/package.json": "{{\\n  \\"name\\": \\"frontend\\",\\n  \\"dependencies\\": {{\\n    \\"next\\": \\"14.0.0\\",\\n    \\"react\\": \\"^18.2.0\\"\\n  }}\\n}}",\n'
+            f'    "frontend/src/app/page.tsx": "export default function Home() {{\\n  return <main><h1>{project["name"]}</h1></main>\\n}}",\n'
+            f'    "frontend/src/lib/api.ts": "export const API_URL = process.env.NEXT_PUBLIC_API_URL || \'http://localhost:8000\';",\n'
+            f'    "frontend/Dockerfile": "FROM node:20-alpine\\nWORKDIR /app\\nCOPY package.json .\\nRUN npm install\\nCOPY . .\\nCMD [\\"npm\\", \\"run\\", \\"dev\\"]"\n'
+            f'  }}\n'
+            f"}}\n"
+            f"```"
+        ),
+        expected_output="JSON object containing complete frontend codebase.",
+        agent=frontend_agent
+    )
+
+    crew_3 = Crew(agents=[frontend_agent], tasks=[frontend_task], process=Process.sequential)
+    res_3 = parse_json_from_text(str(crew_3.kickoff()))
+    all_files.update(res_3.get("files", {}))
+
+    # ─── DEPLOY TO GITHUB ───
+    if not all_files:
+        send_agent_report(
+            "Portfolio Builder", "error",
+            f"Failed to generate project files for {project['name']}."
         )
+        return None
 
-        result = str(crew.kickoff())
+    repo_name = project["slug"]
+    description = f"{project['name']} — {project['why']}"
 
-        # Extract JSON blocks
-        all_files = {}
-        repo_name = project["slug"]
-        description = f"{project['name']} — {project['why']}"
+    print(f"\n📦 Generated {len(all_files)} total files across all services. Pushing to GitHub...")
 
-        json_blocks = re.findall(r'\{[\s\S]*?\}', result)
-
-        for block in json_blocks:
-            try:
-                data = json.loads(block)
-                if "files" in data and isinstance(data["files"], dict):
-                    all_files.update(data["files"])
-                if "repo_name" in data:
-                    repo_name = data["repo_name"]
-                if "description" in data:
-                    description = data["description"]
-            except Exception:
-                continue
-
-        if not all_files:
-            send_agent_report(
-                "Portfolio Builder", "error",
-                f"Failed to parse JSON output for {project['name']}."
-            )
-            return None
-
-        print(f"\n📦 Generated {len(all_files)} files. Pushing to GitHub...")
-
+    try:
         repo_url = github_mgr.push_files(repo_name, all_files, description)
 
         history["built_projects"].append(project["slug"])
@@ -318,8 +286,9 @@ def run_portfolio_builder():
 
         send_agent_report(
             "Portfolio Builder", "success",
-            f"Built: {project['name']}\n"
+            f"Built: *{project['name']}*\n"
             f"Files: {len(all_files)}\n"
+            f"Stack: {project['stack']}\n"
             f"URL: {repo_url}"
         )
 
