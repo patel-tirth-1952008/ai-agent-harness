@@ -203,6 +203,7 @@
   ],
   "solved": [
     "Two Sum",
-    "Add Two Numbers"
+    "Add Two Numbers",
+    "Longest Substring Without Repeating Characters"
   ]
 }
