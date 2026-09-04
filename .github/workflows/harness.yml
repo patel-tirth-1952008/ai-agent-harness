@@ -2,19 +2,24 @@ name: AI Agent Harness 24/7 Runner
 
 on:
   schedule:
-    # 1. LeetCode Solver: every day at 02:00 UTC
-    - cron: '0 2 * * *'
+    # 1. LeetCode Shift 1 (Morning): 02:00 UTC / 07:30 IST
+    - cron: '17 2 * * *'
+    
+    # 2. LeetCode Shift 2 (Afternoon): 10:00 UTC / 15:30 IST
+    - cron: '17 10 * * *'
+    
+    # 3. LeetCode Shift 3 (Night): 18:00 UTC / 23:30 IST
+    - cron: '23 18 * * *'
 
-    # 2. Freelance Finder: every day at 08:00 UTC
-    - cron: '0 8 * * *'
+    # 4. Freelance Finder: Every day at 08:00 UTC
+    - cron: '17 8 * * *'
 
-    # 3. Job Finder: every day at 09:00 UTC
-    - cron: '0 9 * * *'
+    # 5. Job Finder: Every day at 09:00 UTC
+    - cron: '23 9 * * *'
 
-    # 4. Portfolio Builder: every 3 days at 03:00 UTC
-    - cron: '0 3 */3 * *'
+    # 6. Portfolio Builder: Every 3 days at 03:00 UTC
+    - cron: '11 */6 * * *'
 
-  # Manual run from GitHub UI
   workflow_dispatch:
     inputs:
       agent_to_run:
@@ -30,8 +35,8 @@ on:
           - all
 
 permissions:
-  contents: write   # commit data/*.json history updates
-  actions: write    # allow triggering verify/repair workflows
+  contents: write
+  actions: write
 
 jobs:
   run-agent:
@@ -55,17 +60,17 @@ jobs:
       - name: 4. Determine Which Agent to Run
         id: select_agent
         run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "TARGET_AGENT=${{ inputs.agent_to_run }}" >> $GITHUB_ENV
           else
             CRON_SCHEDULE="${{ github.event.schedule }}"
-            if [ "$CRON_SCHEDULE" == "0 2 * * *" ]; then
+            if [ "$CRON_SCHEDULE" = "17 2 * * *" ] || [ "$CRON_SCHEDULE" = "17 10 * * *" ] || [ "$CRON_SCHEDULE" = "17 18 * * *" ]; then
               echo "TARGET_AGENT=leetcode" >> $GITHUB_ENV
-            elif [ "$CRON_SCHEDULE" == "0 8 * * *" ]; then
+            elif [ "$CRON_SCHEDULE" = "23 8 * * *" ]; then
               echo "TARGET_AGENT=freelance" >> $GITHUB_ENV
-            elif [ "$CRON_SCHEDULE" == "0 9 * * *" ]; then
+            elif [ "$CRON_SCHEDULE" = "23 9 * * *" ]; then
               echo "TARGET_AGENT=jobs" >> $GITHUB_ENV
-            elif [ "$CRON_SCHEDULE" == "0 3 */3 * *" ]; then
+            elif [ "$CRON_SCHEDULE" = "11 */6 * * *" ]; then
               echo "TARGET_AGENT=portfolio" >> $GITHUB_ENV
             else
               echo "TARGET_AGENT=leetcode" >> $GITHUB_ENV
