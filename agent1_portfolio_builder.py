@@ -1,12 +1,14 @@
 import os
 import re
 import json
+import subprocess
+from datetime import datetime, timezone
 import litellm
 from dotenv import load_dotenv
-import subprocess
+
 load_dotenv()
 
-# Force LiteLLM to drop parameters unsupported by Groq
+# Force LiteLLM to drop Groq-incompatible params
 litellm.drop_params = True
 os.environ["LITELLM_DROP_PARAMS"] = "true"
 
@@ -38,31 +40,50 @@ os.environ["SERPER_API_KEY"] = os.getenv("SERPER_API_KEY", "")
 from crewai import Agent, Task, Crew, Process, LLM
 from config import (
     GROQ_API_KEY, GROQ_MODEL,
-    MAX_AGENT_ITERATIONS, MAX_AGENT_RPM,
+    MAX_AGENT_ITERATIONS,
     PORTFOLIO_HISTORY_FILE
 )
 from limiter import limiter
-from notifier import send_agent_report
 from github_manager import github_mgr
+
+PORTFOLIO_EVERY_HOURS = 30
 
 
 def get_llm(temperature=0.2):
-    """Routes Groq safely through OpenAI-compatible endpoint format."""
     clean_model = GROQ_MODEL.replace("groq/", "").replace("openai/", "")
     return LLM(
         model=f"openai/{clean_model}",
         base_url="https://api.groq.com/openai/v1",
         api_key=GROQ_API_KEY,
-        temperature=temperature
+        temperature=temperature,
     )
+
+
+def now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def hours_since(iso_ts):
+    if not iso_ts:
+        return 10**9
+    try:
+        dt = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
+        return (datetime.now(timezone.utc) - dt).total_seconds() / 3600.0
+    except Exception:
+        return 10**9
 
 
 def load_history():
     os.makedirs("data", exist_ok=True)
     if os.path.exists(PORTFOLIO_HISTORY_FILE):
         with open(PORTFOLIO_HISTORY_FILE, "r") as f:
-            return json.load(f)
-    return {"built_projects": []}
+            data = json.load(f)
+    else:
+        data = {}
+    data.setdefault("built_projects", [])
+    data.setdefault("last_success_at", None)
+    data.setdefault("in_progress", None)
+    return data
 
 
 def save_history(history):
@@ -70,7 +91,6 @@ def save_history(history):
         json.dump(history, f, indent=2)
 
 
-# ─── HIGH-VALUE INDUSTRY PROJECTS ───
 INDUSTRY_PROJECTS = [
     {
         "slug": "realtime-collaborative-editor",
@@ -87,7 +107,7 @@ INDUSTRY_PROJECTS = [
     {
         "slug": "ecommerce-microservices",
         "name": "E-commerce Platform Architecture",
-        "why": "Amazon-scale architecture. Tests services, authentication, and payments.",
+        "why": "Amazon-scale architecture. Tests microservices, authentication, and payments.",
         "stack": "Node.js, Express, MongoDB, Redis, Stripe API, React, Docker"
     },
     {
@@ -113,6 +133,54 @@ INDUSTRY_PROJECTS = [
         "name": "Banking API with Transaction System",
         "why": "Tests ACID transactions, security, audit logs, and clean backend architecture.",
         "stack": "FastAPI, PostgreSQL, Redis, JWT, pytest, Docker"
+    },
+    {
+        "slug": "video-streaming-api",
+        "name": "Video Streaming & Transcoding Service",
+        "why": "YouTube clone backend. Tests chunked uploads, video processing, and HLS streaming.",
+        "stack": "FastAPI, Node.js, FFmpeg, React, PostgreSQL, Docker"
+    },
+    {
+        "slug": "ai-content-generator-saas",
+        "name": "AI Content Generator SaaS with Billing",
+        "why": "AI SaaS wrapper. Tests OpenAI/Groq API integration, usage limits, and Stripe subscriptions.",
+        "stack": "Next.js, FastAPI, Groq API, Stripe, PostgreSQL, Docker"
+    },
+    {
+        "slug": "distributed-rate-limiter",
+        "name": "Distributed API Rate Limiter & Gateway",
+        "why": "Cloudflare/Kong Gateway clone. Tests Sliding Window algorithm, Redis, and high-throughput routing.",
+        "stack": "FastAPI, Redis, Docker, Locust Load Testing"
+    },
+    {
+        "slug": "food-delivery-tracking",
+        "name": "Food Delivery App with Live Driver Tracking",
+        "why": "UberEats/Swiggy clone. Tests Geo-indexing, live map tracking, and order state machines.",
+        "stack": "Next.js, FastAPI, PostgreSQL PostGIS, WebSockets, Docker"
+    },
+    {
+        "slug": "devops-monitoring-dashboard",
+        "name": "Server Health & Metrics Monitoring Dashboard",
+        "why": "Datadog/Prometheus clone. Tests time-series data, agent pinging, and real-time alerts.",
+        "stack": "React, FastAPI, TimescaleDB/PostgreSQL, Redis, Recharts, Docker"
+    },
+    {
+        "slug": "event-ticketing-system",
+        "name": "High-Concurrency Event Ticketing System",
+        "why": "BookMyShow/Ticketmaster clone. Tests row locking, race conditions, and queue management.",
+        "stack": "Next.js, FastAPI, PostgreSQL (ACID), Redis Queue, Docker"
+    },
+    {
+        "slug": "notification-engine",
+        "name": "Multi-Channel Notification Dispatch Engine",
+        "why": "Novu/Courier clone. Tests async workers (Celery), template rendering, and fallback providers.",
+        "stack": "FastAPI, Celery, Redis, PostgreSQL, React, Docker"
+    },
+    {
+        "slug": "file-storage-cloud",
+        "name": "Cloud File Storage & Sharing Platform",
+        "why": "Dropbox/Google Drive clone. Tests pre-signed URLs, file encryption, and storage quotas.",
+        "stack": "Next.js, FastAPI, AWS S3 / MinIO, PostgreSQL, Docker"
     }
 ]
 
@@ -126,17 +194,9 @@ def pick_next_project(history):
 
 
 def parse_files_from_markdown(text):
-    """
-    Robust multi-format parser:
-    1. Extracts markdown blocks formatted as: FILE: path/to/file.ext\n```code...```
-    2. Fallback to JSON object parsing if markdown block is missing.
-    """
     files = {}
-
-    # Pattern 1: FILE: path/to/filename.ext \n ```lang \n content \n ```
     pattern = r"(?:###\s*)?(?:FILE|File|FILENAME|Filename):\s*`?([a-zA-Z0-9_\-\.\/]+)`?\s*\n+```[a-zA-Z0-9_\-]*\n([\s\S]*?)\n```"
-    matches = re.findall(pattern, text)
-    for filename, content in matches:
+    for filename, content in re.findall(pattern, text):
         clean_name = filename.strip()
         if clean_name and content.strip():
             files[clean_name] = content.strip()
@@ -144,7 +204,6 @@ def parse_files_from_markdown(text):
     if files:
         return files
 
-    # Pattern 2: Fallback JSON extraction
     try:
         match = re.search(r'```json\s*(\{[\s\S]*?\})\s*```', text)
         raw_json = match.group(1) if match else re.search(r'\{[\s\S]*\}', text).group(0)
@@ -157,16 +216,62 @@ def parse_files_from_markdown(text):
     return files
 
 
+def verify_static(files):
+    errors = []
+    for path, content in files.items():
+        if path.endswith(".py"):
+            try:
+                compile(content, path, "exec")
+            except SyntaxError as e:
+                errors.append(f"SyntaxError {path}:{e.lineno} {e.msg}")
+            if re.search(r"from\s+\.", content):
+                errors.append(f"Relative import in {path}")
+
+        if path.endswith("package.json"):
+            try:
+                pkg = json.loads(content)
+                deps = pkg.get("dependencies", {})
+                for bad in ["yjs-react", "react-yjs", "fastapi-websockets-sync"]:
+                    if bad in deps:
+                        errors.append(f"Hallucinated npm package: {bad}")
+            except Exception as e:
+                errors.append(f"Invalid package.json: {e}")
+    return (len(errors) == 0), "\n".join(errors)
+
+
+def trigger_verify(repo_name: str):
+    try:
+        subprocess.run(
+            [
+                "gh", "workflow", "run", "verify-until-green.yml",
+                "-f", f"target_repo={repo_name}",
+                "-f", "attempt=1",
+            ],
+            check=False,
+        )
+        print(f"🚀 Triggered verify-until-green for {repo_name}")
+    except Exception as e:
+        print(f"⚠️ Could not trigger verify workflow: {e}")
+
+
 def run_portfolio_builder():
     print("\n" + "=" * 60)
-    print("  AGENT 1: INDUSTRY-GRADE PORTFOLIO BUILDER")
+    print("  AGENT 1: PORTFOLIO BUILDER (30h gate, silent draft)")
     print("=" * 60)
 
     limiter.check()
-
     history = load_history()
-    project = pick_next_project(history)
 
+    elapsed = hours_since(history.get("last_success_at"))
+    if elapsed < PORTFOLIO_EVERY_HOURS:
+        print(f"⏳ Skip: only {elapsed:.1f}h since last successful project (need {PORTFOLIO_EVERY_HOURS}h).")
+        return None
+
+    if history.get("in_progress"):
+        print(f"⏳ Skip: project already in progress: {history['in_progress']}")
+        return None
+
+    project = pick_next_project(history)
     print(f"🎯 Building: {project['name']}")
     print(f"📚 Stack: {project['stack']}")
 
@@ -174,226 +279,308 @@ def run_portfolio_builder():
     all_files = {}
 
     # ─── STEP 1: DEVOPS & DOCS ───
-    print("\n📝 [1/3] Generating Architecture, README & Docker setup...")
+    print("\n📝 [1/3] Generating README & Docker setup...")
     devops_agent = Agent(
         role="DevOps Architect and Technical Writer",
         goal="Create professional README.md, docker-compose.yml, and config files.",
-        backstory="You write clean architecture docs, docker setup, and professional READMEs.",
+        backstory="You write clean docker setups, professional READMEs, and CI configs.",
         llm=llm,
         max_iter=MAX_AGENT_ITERATIONS,
-        verbose=True
+        verbose=True,
     )
-
     devops_task = Task(
         description=(
-            f"Create documentation and Docker config for: {project['name']}\n"
+            f"Create docs and Docker config for: {project['name']}\n"
             f"Tech Stack: {project['stack']}\n\n"
-            f"You MUST format each file EXACTLY like this:\n\n"
-            f"FILE: README.md\n"
-            f"```markdown\n"
-            f"# {project['name']}\n"
+            "Format each file EXACTLY like this:\n\n"
+            "FILE: README.md\n"
+            "```markdown\n"
+            f"# {project['name']}\n\n"
             f"## Overview\n{project['why']}\n\n"
             f"## Tech Stack\n{project['stack']}\n\n"
-            f"## Quick Start\n```bash\ndocker-compose up\n```\n"
-            f"```\n\n"
-            f"FILE: docker-compose.yml\n"
-            f"```yaml\n"
-            f"version: '3.8'\n"
-            f"services:\n"
-            f"  backend:\n"
-            f"    build: ./backend\n"
-            f"    ports:\n"
-            f"      - '8000:8000'\n"
-            f"  frontend:\n"
-            f"    build: ./frontend\n"
-            f"    ports:\n"
-            f"      - '3000:3000'\n"
-            f"```\n\n"
-            f"FILE: .gitignore\n"
-            f"```text\n"
-            f"__pycache__/\nnode_modules/\n.env\nvenv/\n"
-            f"```\n"
+            "## Quick Start\n```bash\ndocker-compose up\n```\n"
+            "```\n\n"
+            "FILE: docker-compose.yml\n"
+            "```yaml\n"
+            "version: '3.8'\n"
+            "services:\n"
+            "  backend:\n    build: ./backend\n    ports: ['8000:8000']\n"
+            "  frontend:\n    build: ./frontend\n    ports: ['3000:3000']\n"
+            "```\n\n"
+            "FILE: .gitignore\n"
+            "```text\n"
+            "__pycache__/\nnode_modules/\n.env\nvenv/\n"
+            "```\n"
         ),
-        expected_output="Multiple files formatted with FILE: path headers and code blocks.",
-        agent=devops_agent
+        expected_output="Files with FILE headers.",
+        agent=devops_agent,
     )
-
-    crew_1 = Crew(agents=[devops_agent], tasks=[devops_task], process=Process.sequential)
-    res_1_text = str(crew_1.kickoff())
-    files_1 = parse_files_from_markdown(res_1_text)
-    
-    # Fallback if step 1 parsing returned nothing
+    res_1 = str(Crew(agents=[devops_agent], tasks=[devops_task], process=Process.sequential).kickoff())
+    files_1 = parse_files_from_markdown(res_1)
     if not files_1:
         files_1 = {
-            "README.md": f"# {project['name']}\n\n{project['why']}\n\n## Tech Stack\n{project['stack']}\n\n## Quick Start\n```bash\ndocker-compose up\n```",
-            "docker-compose.yml": "version: '3.8'\nservices:\n  backend:\n    build: ./backend\n    ports:\n      - '8000:8000'\n  frontend:\n    build: ./frontend\n    ports:\n      - '3000:3000'",
-            ".gitignore": "__pycache__/\nnode_modules/\n.env\nvenv/\n"
+            "README.md": f"# {project['name']}\n\n{project['why']}\n\n## Stack\n{project['stack']}\n",
+            "docker-compose.yml": "version: '3.8'\nservices:\n  backend:\n    build: ./backend\n    ports: ['8000:8000']\n  frontend:\n    build: ./frontend\n    ports: ['3000:3000']\n",
+            ".gitignore": "__pycache__/\nnode_modules/\n.env\nvenv/\n",
         }
     all_files.update(files_1)
-    print(f"✅ Step 1 generated {len(files_1)} files.")
+    print(f"✅ Stage 1 generated {len(files_1)} files.")
 
-    # ─── STEP 2: BACKEND CODE ───
-    print("\n⚙️ [2/3] Generating Production Backend Code...")
+    # ─── STEP 2: BACKEND ───
+    print("\n⚙️ [2/3] Generating Backend...")
     backend_agent = Agent(
         role="Senior Backend Engineer",
-        goal="Write full backend application code, models, routes, and Dockerfile.",
-        backstory="You build complete Python/FastAPI or Node.js APIs with authentication, database ORMs, and error handling.",
+        goal="Write runnable FastAPI backend with /health, no relative imports, no required DB.",
+        backstory="You produce production-simple backends that boot with uvicorn without external services.",
         llm=llm,
         max_iter=MAX_AGENT_ITERATIONS,
-        verbose=True
+        verbose=True,
     )
-
     backend_task = Task(
         description=(
-            f"Write the backend service files for: {project['name']}\n"
-            f"Tech Stack: {project['stack']}\n\n"
-            f"You MUST format each file EXACTLY like this:\n\n"
-            f"FILE: backend/main.py\n"
-            f"```python\n"
-            f"from fastapi import FastAPI\n\n"
-            f"app = FastAPI(title='{project['name']}')\n\n"
-            f"@app.get('/')\n"
-            f"def root():\n"
-            f"    return {{'message': 'Welcome to {project['name']} API'}}\n"
-            f"```\n\n"
-            f"FILE: backend/requirements.txt\n"
-            f"```text\n"
-            f"fastapi\nuvicorn\npydantic\nsqlalchemy\npsycopg2-binary\npython-dotenv\n"
-            f"```\n\n"
-            f"FILE: backend/Dockerfile\n"
-            f"```dockerfile\n"
-            f"FROM python:3.11-slim\nWORKDIR /app\nCOPY requirements.txt .\nRUN pip install -r requirements.txt\nCOPY . .\nCMD [\"uvicorn\", \"main:app\", \"--host\", \"0.0.0.0\", \"--port\", \"8000\"]\n"
-            f"```\n"
+            f"Write backend files for {project['name']}.\n"
+            "Rules:\n"
+            "- Single backend/main.py must run with: python -m uvicorn main:app --app-dir backend\n"
+            "- Absolutely no relative imports (no `from .something`)\n"
+            "- Must include a /health endpoint returning {'status':'ok'}\n"
+            "- No mandatory Postgres/Redis to boot\n\n"
+            "Format:\n"
+            "FILE: backend/main.py\n"
+            "```python\n"
+            "from fastapi import FastAPI\nfrom fastapi.middleware.cors import CORSMiddleware\n"
+            "app = FastAPI()\n"
+            "app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_methods=['*'], allow_headers=['*'])\n"
+            "@app.get('/')\ndef root():\n    return {'status':'online'}\n"
+            "@app.get('/health')\ndef health():\n    return {'status':'ok'}\n"
+            "```\n\n"
+            "FILE: backend/requirements.txt\n"
+            "```text\n"
+            "fastapi\nuvicorn[standard]\npydantic\npython-dotenv\n"
+            "```\n\n"
+            "FILE: backend/Dockerfile\n"
+            "```dockerfile\n"
+            "FROM python:3.11-slim\nWORKDIR /app\nCOPY requirements.txt .\nRUN pip install -r requirements.txt\nCOPY . .\n"
+            "CMD [\"uvicorn\", \"main:app\", \"--host\", \"0.0.0.0\", \"--port\", \"8000\"]\n"
+            "```\n"
         ),
-        expected_output="Multiple backend files formatted with FILE: path headers and code blocks.",
-        agent=backend_agent
+        expected_output="Backend files with FILE headers.",
+        agent=backend_agent,
     )
-
-    crew_2 = Crew(agents=[backend_agent], tasks=[backend_task], process=Process.sequential)
-    res_2_text = str(crew_2.kickoff())
-    files_2 = parse_files_from_markdown(res_2_text)
-
-    # Fallback if step 2 parsing returned nothing
+    res_2 = str(Crew(agents=[backend_agent], tasks=[backend_task], process=Process.sequential).kickoff())
+    files_2 = parse_files_from_markdown(res_2)
     if not files_2:
         files_2 = {
-            "backend/main.py": f"from fastapi import FastAPI\n\napp = FastAPI(title='{project['name']}')\n\n@app.get('/')\ndef root():\n    return {{'message': '{project['name']} API is live'}}\n",
-            "backend/requirements.txt": "fastapi\nuvicorn\npydantic\npython-dotenv\n",
-            "backend/Dockerfile": "FROM python:3.11-slim\nWORKDIR /app\nCOPY requirements.txt .\nRUN pip install -r requirements.txt\nCOPY . .\nCMD [\"uvicorn\", \"main:app\", \"--host\", \"0.0.0.0\", \"--port\", \"8000\"]\n"
+            "backend/main.py": (
+                "from fastapi import FastAPI\n"
+                "from fastapi.middleware.cors import CORSMiddleware\n"
+                "app = FastAPI()\n"
+                "app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_methods=['*'], allow_headers=['*'])\n"
+                "@app.get('/')\ndef root():\n    return {'status':'online'}\n"
+                "@app.get('/health')\ndef health():\n    return {'status':'ok'}\n"
+            ),
+            "backend/requirements.txt": "fastapi\nuvicorn[standard]\npydantic\npython-dotenv\n",
+            "backend/Dockerfile": (
+                "FROM python:3.11-slim\nWORKDIR /app\nCOPY requirements.txt .\n"
+                "RUN pip install -r requirements.txt\nCOPY . .\n"
+                'CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]\n'
+            ),
         }
     all_files.update(files_2)
-    print(f"✅ Step 2 generated {len(files_2)} files.")
+    print(f"✅ Stage 2 generated {len(files_2)} files.")
 
-    # ─── STEP 3: FRONTEND CODE ───
-    print("\n🎨 [3/3] Generating Modern Frontend Code...")
+    # ─── STEP 3: FRONTEND ───
+    print("\n🎨 [3/3] Generating Frontend...")
     frontend_agent = Agent(
         role="Senior Frontend Engineer",
-        goal="Build modern Next.js/React UI code, pages, and components.",
-        backstory="You write clean TypeScript and React components with responsive layout.",
+        goal="Write buildable Next.js frontend using only real npm packages.",
+        backstory="You avoid hallucinated packages and use next/react/react-dom only for base setup.",
         llm=llm,
         max_iter=MAX_AGENT_ITERATIONS,
-        verbose=True
+        verbose=True,
     )
-
     frontend_task = Task(
         description=(
-            f"Write the frontend web application files for: {project['name']}\n"
-            f"Tech Stack: {project['stack']}\n\n"
-            f"You MUST format each file EXACTLY like this:\n\n"
-            f"FILE: frontend/package.json\n"
-            f"```json\n"
-            f"{{\n"
-            f'  "name": "frontend",\n'
-            f'  "scripts": {{\n'
-            f'    "dev": "next dev"\n'
-            f'  }},\n'
-            f'  "dependencies": {{\n'
-            f'    "next": "14.0.0",\n'
-            f'    "react": "^18.2.0",\n'
-            f'    "react-dom": "^18.2.0"\n'
-            f'  }}\n'
-            f"}}\n"
-            f"```\n\n"
-            f"FILE: frontend/src/app/page.tsx\n"
-            f"```tsx\n"
-            f"export default function Home() {{\n"
-            f"  return (\n"
-            f"    <main className='p-8'>\n"
-            f"      <h1 className='text-3xl font-bold'>{project['name']}</h1>\n"
-            f"      <p className='mt-2 text-gray-600'>{project['why']}</p>\n"
-            f"    </main>\n"
-            f"  );\n"
-            f"}}\n"
-            f"```\n\n"
-            f"FILE: frontend/Dockerfile\n"
-            f"```dockerfile\n"
-            f"FROM node:20-alpine\nWORKDIR /app\nCOPY package.json .\nRUN npm install\nCOPY . .\nCMD [\"npm\", \"run\", \"dev\"]\n"
-            f"```\n"
+            f"Write frontend files for {project['name']}.\n"
+            "Rules:\n"
+            "- package.json must only use real packages: next, react, react-dom\n"
+            "- No hallucinated packages like yjs-react\n"
+            "- Must be buildable with: npm install && npm run build\n\n"
+            "Format:\n"
+            "FILE: frontend/package.json\n"
+            "```json\n"
+            "{\n"
+            "  \"name\": \"frontend\",\n"
+            "  \"private\": true,\n"
+            "  \"scripts\": {\"dev\":\"next dev\",\"build\":\"next build\",\"start\":\"next start\"},\n"
+            "  \"dependencies\": {\"next\":\"14.1.0\",\"react\":\"^18.2.0\",\"react-dom\":\"^18.2.0\"}\n"
+            "}\n"
+            "```\n\n"
+            "FILE: frontend/src/app/layout.tsx\n"
+            "```tsx\n"
+            "export default function RootLayout({children}: {children: React.ReactNode}) {\n"
+            "  return (<html><body>{children}</body></html>);\n"
+            "}\n"
+            "```\n\n"
+            "FILE: frontend/src/app/page.tsx\n"
+            "```tsx\n"
+            "export default function Home() {\n"
+            f"  return (<main style={{{{padding: 24}}}}><h1>{project['name']}</h1><p>{project['why']}</p></main>);\n"
+            "}\n"
+            "```\n\n"
+            "FILE: frontend/next.config.js\n"
+            "```js\n"
+            "/** @type {import('next').NextConfig} */\n"
+            "const nextConfig = { reactStrictMode: true };\n"
+            "module.exports = nextConfig;\n"
+            "```\n\n"
+            "FILE: frontend/tsconfig.json\n"
+            "```json\n"
+            "{\n"
+            "  \"compilerOptions\": {\n"
+            "    \"target\": \"es5\",\n"
+            "    \"lib\": [\"dom\", \"dom.iterable\", \"esnext\"],\n"
+            "    \"allowJs\": true,\n"
+            "    \"skipLibCheck\": true,\n"
+            "    \"strict\": false,\n"
+            "    \"forceConsistentCasingInFileNames\": true,\n"
+            "    \"noEmit\": true,\n"
+            "    \"esModuleInterop\": true,\n"
+            "    \"module\": \"esnext\",\n"
+            "    \"moduleResolution\": \"node\",\n"
+            "    \"resolveJsonModule\": true,\n"
+            "    \"isolatedModules\": true,\n"
+            "    \"jsx\": \"preserve\",\n"
+            "    \"incremental\": true,\n"
+            "    \"plugins\": [{ \"name\": \"next\" }]\n"
+            "  },\n"
+            "  \"include\": [\"next-env.d.ts\", \"**/*.ts\", \"**/*.tsx\"],\n"
+            "  \"exclude\": [\"node_modules\"]\n"
+            "}\n"
+            "```\n\n"
+            "FILE: frontend/Dockerfile\n"
+            "```dockerfile\n"
+            "FROM node:20-alpine\nWORKDIR /app\nCOPY package.json .\nRUN npm install\nCOPY . .\n"
+            'CMD ["npm", "run", "dev"]\n'
+            "```\n"
         ),
-        expected_output="Multiple frontend files formatted with FILE: path headers and code blocks.",
-        agent=frontend_agent
+        expected_output="Frontend files with FILE headers.",
+        agent=frontend_agent,
     )
-
-    crew_3 = Crew(agents=[frontend_agent], tasks=[frontend_task], process=Process.sequential)
-    res_3_text = str(crew_3.kickoff())
-    files_3 = parse_files_from_markdown(res_3_text)
-
-    # Fallback if step 3 parsing returned nothing
+    res_3 = str(Crew(agents=[frontend_agent], tasks=[frontend_task], process=Process.sequential).kickoff())
+    files_3 = parse_files_from_markdown(res_3)
     if not files_3:
         files_3 = {
-            "frontend/package.json": f"{{\n  \"name\": \"frontend\",\n  \"scripts\": {{\n    \"dev\": \"next dev\"\n  }},\n  \"dependencies\": {{\n    \"next\": \"14.0.0\",\n    \"react\": \"^18.2.0\",\n    \"react-dom\": \"^18.2.0\"\n  }}\n}}",
-            "frontend/src/app/page.tsx": f"export default function Home() {{\n  return <main className='p-8'><h1 className='text-3xl font-bold'>{project['name']}</h1></main>;\n}}",
-            "frontend/Dockerfile": "FROM node:20-alpine\nWORKDIR /app\nCOPY package.json .\nRUN npm install\nCOPY . .\nCMD [\"npm\", \"run\", \"dev\"]\n"
+            "frontend/package.json": (
+                "{\n"
+                "  \"name\": \"frontend\",\n"
+                "  \"private\": true,\n"
+                "  \"scripts\": {\"dev\":\"next dev\",\"build\":\"next build\",\"start\":\"next start\"},\n"
+                "  \"dependencies\": {\"next\":\"14.1.0\",\"react\":\"^18.2.0\",\"react-dom\":\"^18.2.0\"}\n"
+                "}\n"
+            ),
+            "frontend/src/app/layout.tsx": (
+                "export default function RootLayout({children}: {children: React.ReactNode}) {\n"
+                "  return (<html><body>{children}</body></html>);\n"
+                "}\n"
+            ),
+            "frontend/src/app/page.tsx": (
+                "export default function Home() {\n"
+                f"  return (<main style={{{{padding: 24}}}}><h1>{project['name']}</h1></main>);\n"
+                "}\n"
+            ),
+            "frontend/next.config.js": (
+                "/** @type {import('next').NextConfig} */\n"
+                "const nextConfig = { reactStrictMode: true };\n"
+                "module.exports = nextConfig;\n"
+            ),
+            "frontend/tsconfig.json": (
+                "{\n"
+                "  \"compilerOptions\": {\n"
+                "    \"target\": \"es5\",\n"
+                "    \"lib\": [\"dom\", \"dom.iterable\", \"esnext\"],\n"
+                "    \"allowJs\": true,\n"
+                "    \"skipLibCheck\": true,\n"
+                "    \"strict\": false,\n"
+                "    \"forceConsistentCasingInFileNames\": true,\n"
+                "    \"noEmit\": true,\n"
+                "    \"esModuleInterop\": true,\n"
+                "    \"module\": \"esnext\",\n"
+                "    \"moduleResolution\": \"node\",\n"
+                "    \"resolveJsonModule\": true,\n"
+                "    \"isolatedModules\": true,\n"
+                "    \"jsx\": \"preserve\",\n"
+                "    \"incremental\": true,\n"
+                "    \"plugins\": [{ \"name\": \"next\" }]\n"
+                "  },\n"
+                "  \"include\": [\"next-env.d.ts\", \"**/*.ts\", \"**/*.tsx\"],\n"
+                "  \"exclude\": [\"node_modules\"]\n"
+                "}\n"
+            ),
+            "frontend/Dockerfile": (
+                "FROM node:20-alpine\nWORKDIR /app\nCOPY package.json .\nRUN npm install\nCOPY . .\n"
+                'CMD ["npm", "run", "dev"]\n'
+            ),
         }
     all_files.update(files_3)
-    print(f"✅ Step 3 generated {len(files_3)} files.")
+    print(f"✅ Stage 3 generated {len(files_3)} files.")
 
-    # ─── DEPLOY TO GITHUB ───
+    # ─── STATIC SELF-HEAL LOOP (bounded 5 tries) ───
+    for i in range(5):
+        ok, err = verify_static(all_files)
+        if ok:
+            break
+        print(f"🩹 Static repair round {i+1}: {err}")
+        fix_agent = Agent(
+            role="Repair Engineer",
+            goal="Fix broken generated files based on validation errors",
+            backstory="You fix syntax errors, remove relative imports, remove fake packages.",
+            llm=llm,
+            max_iter=4,
+            verbose=True,
+        )
+        fix_task = Task(
+            description=(
+                "Return ONLY the corrected full files that fix these errors:\n"
+                f"{err}\n\n"
+                "Current files:\n"
+                + "\n".join([f"FILE: {p}\n```\n{c[:1500]}\n```" for p, c in list(all_files.items())[:8]])
+            ),
+            expected_output="Corrected files as FILE codeblocks",
+            agent=fix_agent,
+        )
+        fixed = parse_files_from_markdown(
+            str(Crew(agents=[fix_agent], tasks=[fix_task], process=Process.sequential).kickoff())
+        )
+        if fixed:
+            all_files.update(fixed)
+        else:
+            break
+
+    # ─── PUSH DRAFT TO GITHUB (SILENT, NO TELEGRAM) ───
     repo_name = project["slug"]
     description = f"{project['name']} — {project['why']}"
-
-    print(f"\n📦 Deploying total {len(all_files)} files to GitHub repo '{repo_name}'...")
+    print(f"\n📦 Pushing draft {len(all_files)} files to '{repo_name}' (no Telegram yet)...")
 
     try:
         repo_url = github_mgr.push_files(repo_name, all_files, description)
-        trigger_verify(repo_name)
-        history["built_projects"].append(project["slug"])
+
+        # mark in-progress; success only after CI green
+        history["in_progress"] = {
+            "slug": repo_name,
+            "started_at": now_iso(),
+            "repo_url": repo_url,
+        }
         save_history(history)
 
-        send_agent_report(
-            "Portfolio Builder", "success",
-            f"Built: *{project['name']}*\n"
-            f"Files: {len(all_files)}\n"
-            f"Stack: {project['stack']}\n"
-            f"URL: {repo_url}"
-        )
-
+        # kick off closed-loop verify (no notify yet)
+        trigger_verify(repo_name)
+        print(f"⏳ Waiting for verify-until-green to confirm project before notifying.")
         return repo_url
 
     except Exception as e:
-        err = str(e)
-        if "LIMIT REACHED" in err:
-            send_agent_report("Portfolio Builder", "warning", err)
-        else:
-            send_agent_report("Portfolio Builder", "error", err)
-        print(f"❌ Error: {e}")
+        print(f"❌ Push failed: {e}")
         return None
 
-
-
-def trigger_verify(repo_name: str):
-    """Trigger Level-2 CI verification on the generated repo."""
-    try:
-        subprocess.run(
-            [
-                "gh", "workflow", "run", "verify-project.yml",
-                "-f", f"target_repo={repo_name}",
-                "-f", "attempt=1",
-            ],
-            check=False,
-        )
-        print(f"🚀 Triggered verify-project for {repo_name}")
-    except Exception as e:
-        print(f"Could not trigger verify workflow: {e}")
 
 if __name__ == "__main__":
     run_portfolio_builder()
