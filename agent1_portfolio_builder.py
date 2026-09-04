@@ -12,6 +12,7 @@ load_dotenv()
 litellm.drop_params = True
 os.environ["LITELLM_DROP_PARAMS"] = "true"
 
+
 def _clean_messages(kwargs):
     if "messages" in kwargs and isinstance(kwargs["messages"], list):
         for msg in kwargs["messages"]:
@@ -19,16 +20,20 @@ def _clean_messages(kwargs):
                 msg.pop("cache_breakpoint", None)
                 msg.pop("cache_control", None)
 
+
 _orig_completion = litellm.completion
 _orig_acompletion = litellm.acompletion
+
 
 def _patched_completion(*args, **kwargs):
     _clean_messages(kwargs)
     return _orig_completion(*args, **kwargs)
 
+
 async def _patched_acompletion(*args, **kwargs):
     _clean_messages(kwargs)
     return await _orig_acompletion(*args, **kwargs)
+
 
 litellm.completion = _patched_completion
 litellm.acompletion = _patched_acompletion
@@ -39,14 +44,16 @@ os.environ["SERPER_API_KEY"] = os.getenv("SERPER_API_KEY", "")
 
 from crewai import Agent, Task, Crew, Process, LLM
 from config import (
-    GROQ_API_KEY, GROQ_MODEL,
+    GROQ_API_KEY,
+    GROQ_MODEL,
     MAX_AGENT_ITERATIONS,
-    PORTFOLIO_HISTORY_FILE
+    PORTFOLIO_HISTORY_FILE,
 )
 from limiter import limiter
 from github_manager import github_mgr
 
-PORTFOLIO_EVERY_HOURS = 30
+# 1 project per day
+PORTFOLIO_EVERY_HOURS = 24
 
 
 def get_llm(temperature=0.2):
@@ -83,6 +90,7 @@ def load_history():
     data.setdefault("built_projects", [])
     data.setdefault("last_success_at", None)
     data.setdefault("in_progress", None)
+    data.setdefault("all_projects_completed_notified", False)
     return data
 
 
@@ -91,106 +99,84 @@ def save_history(history):
         json.dump(history, f, indent=2)
 
 
+# ─── 50 INDUSTRY-GRADE PORTFOLIO PROJECTS ───
 INDUSTRY_PROJECTS = [
-    {
-        "slug": "realtime-collaborative-editor",
-        "name": "Real-time Collaborative Document Editor",
-        "why": "Google Docs clone. Tests WebSockets, real-time sync, and concurrency.",
-        "stack": "Next.js 14, TypeScript, FastAPI, WebSockets, PostgreSQL, Redis, Docker"
-    },
-    {
-        "slug": "url-shortener-analytics",
-        "name": "URL Shortener with Analytics Dashboard",
-        "why": "Bit.ly clone. Tests system design, caching, rate limiting, and analytics.",
-        "stack": "FastAPI, PostgreSQL, Redis, React, TypeScript, Chart.js, Docker"
-    },
-    {
-        "slug": "ecommerce-microservices",
-        "name": "E-commerce Platform Architecture",
-        "why": "Amazon-scale architecture. Tests microservices, authentication, and payments.",
-        "stack": "Node.js, Express, MongoDB, Redis, Stripe API, React, Docker"
-    },
-    {
-        "slug": "job-board-with-search",
-        "name": "Job Board with Advanced Filters",
-        "why": "LinkedIn clone. Tests complex queries, authentication, and UI state.",
-        "stack": "Next.js, FastAPI, PostgreSQL, Redis, Docker, JWT Auth"
-    },
-    {
-        "slug": "chat-application",
-        "name": "Real-time Chat Platform",
-        "why": "WhatsApp/Slack clone. Tests WebSockets, room management, and messaging.",
-        "stack": "Next.js, Socket.io, Node.js, PostgreSQL, Redis, Docker"
-    },
-    {
-        "slug": "task-management-saas",
-        "name": "Task Management SaaS (Trello Clone)",
-        "why": "Tests drag-and-drop UI, state management, and team permissions.",
-        "stack": "React, TypeScript, FastAPI, PostgreSQL, Redis, Docker"
-    },
-    {
-        "slug": "banking-api-system",
-        "name": "Banking API with Transaction System",
-        "why": "Tests ACID transactions, security, audit logs, and clean backend architecture.",
-        "stack": "FastAPI, PostgreSQL, Redis, JWT, pytest, Docker"
-    },
-    {
-        "slug": "video-streaming-api",
-        "name": "Video Streaming & Transcoding Service",
-        "why": "YouTube clone backend. Tests chunked uploads, video processing, and HLS streaming.",
-        "stack": "FastAPI, Node.js, FFmpeg, React, PostgreSQL, Docker"
-    },
-    {
-        "slug": "ai-content-generator-saas",
-        "name": "AI Content Generator SaaS with Billing",
-        "why": "AI SaaS wrapper. Tests OpenAI/Groq API integration, usage limits, and Stripe subscriptions.",
-        "stack": "Next.js, FastAPI, Groq API, Stripe, PostgreSQL, Docker"
-    },
-    {
-        "slug": "distributed-rate-limiter",
-        "name": "Distributed API Rate Limiter & Gateway",
-        "why": "Cloudflare/Kong Gateway clone. Tests Sliding Window algorithm, Redis, and high-throughput routing.",
-        "stack": "FastAPI, Redis, Docker, Locust Load Testing"
-    },
-    {
-        "slug": "food-delivery-tracking",
-        "name": "Food Delivery App with Live Driver Tracking",
-        "why": "UberEats/Swiggy clone. Tests Geo-indexing, live map tracking, and order state machines.",
-        "stack": "Next.js, FastAPI, PostgreSQL PostGIS, WebSockets, Docker"
-    },
-    {
-        "slug": "devops-monitoring-dashboard",
-        "name": "Server Health & Metrics Monitoring Dashboard",
-        "why": "Datadog/Prometheus clone. Tests time-series data, agent pinging, and real-time alerts.",
-        "stack": "React, FastAPI, TimescaleDB/PostgreSQL, Redis, Recharts, Docker"
-    },
-    {
-        "slug": "event-ticketing-system",
-        "name": "High-Concurrency Event Ticketing System",
-        "why": "BookMyShow/Ticketmaster clone. Tests row locking, race conditions, and queue management.",
-        "stack": "Next.js, FastAPI, PostgreSQL (ACID), Redis Queue, Docker"
-    },
-    {
-        "slug": "notification-engine",
-        "name": "Multi-Channel Notification Dispatch Engine",
-        "why": "Novu/Courier clone. Tests async workers (Celery), template rendering, and fallback providers.",
-        "stack": "FastAPI, Celery, Redis, PostgreSQL, React, Docker"
-    },
-    {
-        "slug": "file-storage-cloud",
-        "name": "Cloud File Storage & Sharing Platform",
-        "why": "Dropbox/Google Drive clone. Tests pre-signed URLs, file encryption, and storage quotas.",
-        "stack": "Next.js, FastAPI, AWS S3 / MinIO, PostgreSQL, Docker"
-    }
+    {"slug": "url-shortener-analytics", "name": "URL Shortener with Analytics", "why": "Bitly-style system design: hashing, redirects, click analytics.", "stack": "FastAPI, Next.js, SQLite, Docker"},
+    {"slug": "realtime-collaborative-editor", "name": "Real-time Collaborative Editor", "why": "Google Docs-style websockets collaboration.", "stack": "FastAPI, WebSockets, Next.js, Docker"},
+    {"slug": "chat-app-rooms", "name": "Real-time Chat with Rooms", "why": "Slack/WhatsApp fundamentals: rooms, presence, messages.", "stack": "FastAPI, WebSockets, Next.js, Docker"},
+    {"slug": "trello-task-board", "name": "Task Board SaaS (Trello Clone)", "why": "Kanban boards, auth, team permissions.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "job-board-filters", "name": "Job Board with Advanced Filters", "why": "LinkedIn-like search, filters, applications.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "ecommerce-storefront", "name": "E-commerce Store + Cart + Checkout", "why": "Catalog, cart, orders, checkout flow.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "banking-ledger-api", "name": "Banking Ledger & Transfers API", "why": "Transactions, auth, audit logs.", "stack": "FastAPI, SQLite, JWT, Docker"},
+    {"slug": "expense-splitter", "name": "Expense Splitter (Splitwise Clone)", "why": "Groups, balances, settlements.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "blog-cms-markdown", "name": "Markdown Blog CMS", "why": "CRUD, auth, SEO pages, rich content.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "notes-app-sync", "name": "Notes App with Sync API", "why": "CRUD notes, tags, search, auth.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "file-storage-share", "name": "Cloud File Storage & Sharing", "why": "Upload, share links, expiry, quotas.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "image-gallery-cdn", "name": "Image Gallery with Processing", "why": "Uploads, thumbnails, albums.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "video-meta-platform", "name": "Video Metadata Platform", "why": "Upload metadata, player UI, comments.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "notification-center", "name": "Multi-channel Notification Center", "why": "In-app notifications + delivery logs.", "stack": "FastAPI, Next.js, Docker"},
+    {"slug": "email-campaign-tool", "name": "Email Campaign Dashboard", "why": "Templates, audiences, campaign stats UI.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "feature-flag-service", "name": "Feature Flag Service", "why": "Flags, targeting rules, rollout percentages.", "stack": "FastAPI, Next.js, Docker"},
+    {"slug": "api-rate-limiter-gateway", "name": "API Gateway + Rate Limiter", "why": "Token bucket/sliding window, API keys, routing.", "stack": "FastAPI, Docker"},
+    {"slug": "auth-service-oauth", "name": "Auth Service (JWT + OAuth-ready)", "why": "Register/login/refresh tokens/roles.", "stack": "FastAPI, Next.js, Docker"},
+    {"slug": "rbac-admin-panel", "name": "RBAC Admin Panel", "why": "Users, roles, permissions matrix.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "audit-log-platform", "name": "Audit Log Platform", "why": "Append-only event logs, filters, export.", "stack": "FastAPI, Next.js, Docker"},
+    {"slug": "inventory-management", "name": "Inventory Management System", "why": "SKU, stock in/out, low-stock alerts.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "pos-billing-system", "name": "POS Billing System", "why": "Products, invoices, taxes, receipts.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "crm-pipeline", "name": "CRM Sales Pipeline", "why": "Leads, stages, activities, dashboard.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "helpdesk-ticketing", "name": "Helpdesk Ticketing System", "why": "Tickets, priorities, assignments, SLA timers.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "knowledge-base-search", "name": "Knowledge Base with Search", "why": "Articles, categories, full-text search UI.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "form-builder", "name": "Dynamic Form Builder", "why": "Create forms, collect responses, export CSV.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "survey-analytics", "name": "Survey & Analytics Platform", "why": "Surveys, charts, response insights.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "booking-scheduler", "name": "Appointment Booking Scheduler", "why": "Slots, bookings, cancellations, calendar UI.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "event-ticketing", "name": "Event Ticketing System", "why": "Events, tickets, orders, QR-ready flow.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "hotel-reservation", "name": "Hotel Reservation System", "why": "Rooms, availability, booking workflow.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "food-delivery-tracker", "name": "Food Delivery + Order Tracking", "why": "Restaurants, cart, order states, live status.", "stack": "Next.js, FastAPI, WebSockets, Docker"},
+    {"slug": "ride-fare-estimator", "name": "Ride Fare Estimator + Trips API", "why": "Pricing rules, trip lifecycle, roles.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "workout-tracker", "name": "Fitness Workout Tracker", "why": "Plans, logs, progress charts.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "habit-tracker", "name": "Habit Tracker with Streaks", "why": "Daily habits, streaks, reminders API.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "personal-finance-dashboard", "name": "Personal Finance Dashboard", "why": "Accounts, transactions, budgets, charts.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "invoice-generator", "name": "Invoice Generator SaaS", "why": "Clients, invoices, PDF-ready UI/API.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "subscription-billing-demo", "name": "Subscription Billing Demo", "why": "Plans, trials, customer portal flow.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "saas-waitlist-referral", "name": "SaaS Waitlist + Referral System", "why": "Waitlist, referral codes, leaderboard.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "multi-tenant-notes", "name": "Multi-tenant Notes SaaS", "why": "Tenant isolation, members, roles.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "api-status-page", "name": "Status Page & Uptime Monitor", "why": "Service checks, incidents, public status page.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "log-ingestion-dashboard", "name": "Log Ingestion Dashboard", "why": "Ingest logs API, search/filter UI, severity charts.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "metrics-dashboard", "name": "DevOps Metrics Dashboard", "why": "Custom metrics API + realtime charts.", "stack": "Next.js, FastAPI, WebSockets, Docker"},
+    {"slug": "ci-cd-mini-dashboard", "name": "Mini CI/CD Run Dashboard", "why": "Pipeline runs, statuses, logs viewer.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "secret-manager-lite", "name": "Secrets Manager Lite", "why": "Encrypted secrets CRUD, access policies.", "stack": "FastAPI, Next.js, Docker"},
+    {"slug": "webhook-debugger", "name": "Webhook Debugger & Inspector", "why": "Receive webhooks, inspect payloads, replay.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "graphql-bff-shop", "name": "GraphQL BFF for Shop APIs", "why": "BFF pattern, schema, frontend integration.", "stack": "FastAPI, Next.js, Docker"},
+    {"slug": "search-autocomplete-service", "name": "Search Autocomplete Service", "why": "Prefix search, ranking, debounced UI.", "stack": "FastAPI, Next.js, Docker"},
+    {"slug": "recommendation-demo", "name": "Simple Recommendation Engine Demo", "why": "User-item interactions, top-N recommendations.", "stack": "FastAPI, Next.js, Docker"},
+    {"slug": "chatbot-helpdesk", "name": "Helpdesk Chatbot + Ticket Escalation", "why": "Bot FAQ flow then human ticket creation.", "stack": "Next.js, FastAPI, Docker"},
+    {"slug": "ai-support-summarizer", "name": "AI Support Ticket Summarizer", "why": "Tickets + summary endpoint + dashboard.", "stack": "Next.js, FastAPI, Docker"},
 ]
 
 
 def pick_next_project(history):
+    """Return next unbuilt project, or None if all 50 are done."""
     built = set(history.get("built_projects", []))
-    for project in INDUSTRY_PROJECTS:
-        if project["slug"] not in built:
-            return project
-    return INDUSTRY_PROJECTS[len(built) % len(INDUSTRY_PROJECTS)]
+    remaining = [p for p in INDUSTRY_PROJECTS if p["slug"] not in built]
+
+    if not remaining:
+        if not history.get("all_projects_completed_notified"):
+            try:
+                from notifier import send_notification
+                send_notification(
+                    "✅ All 50 portfolio projects are completed!\n"
+                    f"Finished: {len(built)}/{len(INDUSTRY_PROJECTS)}\n"
+                    "Queue is empty. Add more projects when ready."
+                )
+            except Exception as e:
+                print(f"⚠️ Completion notify failed: {e}")
+            history["all_projects_completed_notified"] = True
+            save_history(history)
+        print("🎉 All 50 projects completed. No new project to build.")
+        return None
+
+    print(f"📊 Progress: {len(built)}/{len(INDUSTRY_PROJECTS)} completed | {len(remaining)} remaining")
+    return remaining[0]
 
 
 def parse_files_from_markdown(text):
@@ -205,8 +191,8 @@ def parse_files_from_markdown(text):
         return files
 
     try:
-        match = re.search(r'```json\s*(\{[\s\S]*?\})\s*```', text)
-        raw_json = match.group(1) if match else re.search(r'\{[\s\S]*\}', text).group(0)
+        match = re.search(r"```json\s*(\{[\s\S]*?\})\s*```", text)
+        raw_json = match.group(1) if match else re.search(r"\{[\s\S]*\}", text).group(0)
         data = json.loads(raw_json)
         if isinstance(data.get("files"), dict):
             return data["files"]
@@ -243,9 +229,14 @@ def trigger_verify(repo_name: str):
     try:
         subprocess.run(
             [
-                "gh", "workflow", "run", "verify-until-green.yml",
-                "-f", f"target_repo={repo_name}",
-                "-f", "attempt=1",
+                "gh",
+                "workflow",
+                "run",
+                "verify-until-green.yml",
+                "-f",
+                f"target_repo={repo_name}",
+                "-f",
+                "attempt=1",
             ],
             check=False,
         )
@@ -256,7 +247,7 @@ def trigger_verify(repo_name: str):
 
 def run_portfolio_builder():
     print("\n" + "=" * 60)
-    print("  AGENT 1: PORTFOLIO BUILDER (30h gate, silent draft)")
+    print("  AGENT 1: PORTFOLIO BUILDER (24h gate, 50 projects, silent draft)")
     print("=" * 60)
 
     limiter.check()
@@ -272,6 +263,9 @@ def run_portfolio_builder():
         return None
 
     project = pick_next_project(history)
+    if project is None:
+        return None
+
     print(f"🎯 Building: {project['name']}")
     print(f"📚 Stack: {project['stack']}")
 
@@ -360,7 +354,7 @@ def run_portfolio_builder():
             "FILE: backend/Dockerfile\n"
             "```dockerfile\n"
             "FROM python:3.11-slim\nWORKDIR /app\nCOPY requirements.txt .\nRUN pip install -r requirements.txt\nCOPY . .\n"
-            "CMD [\"uvicorn\", \"main:app\", \"--host\", \"0.0.0.0\", \"--port\", \"8000\"]\n"
+            'CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]\n'
             "```\n"
         ),
         expected_output="Backend files with FILE headers.",
@@ -409,10 +403,10 @@ def run_portfolio_builder():
             "FILE: frontend/package.json\n"
             "```json\n"
             "{\n"
-            "  \"name\": \"frontend\",\n"
-            "  \"private\": true,\n"
-            "  \"scripts\": {\"dev\":\"next dev\",\"build\":\"next build\",\"start\":\"next start\"},\n"
-            "  \"dependencies\": {\"next\":\"14.1.0\",\"react\":\"^18.2.0\",\"react-dom\":\"^18.2.0\"}\n"
+            '  "name": "frontend",\n'
+            '  "private": true,\n'
+            '  "scripts": {"dev":"next dev","build":"next build","start":"next start"},\n'
+            '  "dependencies": {"next":"14.1.0","react":"^18.2.0","react-dom":"^18.2.0"}\n'
             "}\n"
             "```\n\n"
             "FILE: frontend/src/app/layout.tsx\n"
@@ -436,25 +430,25 @@ def run_portfolio_builder():
             "FILE: frontend/tsconfig.json\n"
             "```json\n"
             "{\n"
-            "  \"compilerOptions\": {\n"
-            "    \"target\": \"es5\",\n"
-            "    \"lib\": [\"dom\", \"dom.iterable\", \"esnext\"],\n"
-            "    \"allowJs\": true,\n"
-            "    \"skipLibCheck\": true,\n"
-            "    \"strict\": false,\n"
-            "    \"forceConsistentCasingInFileNames\": true,\n"
-            "    \"noEmit\": true,\n"
-            "    \"esModuleInterop\": true,\n"
-            "    \"module\": \"esnext\",\n"
-            "    \"moduleResolution\": \"node\",\n"
-            "    \"resolveJsonModule\": true,\n"
-            "    \"isolatedModules\": true,\n"
-            "    \"jsx\": \"preserve\",\n"
-            "    \"incremental\": true,\n"
-            "    \"plugins\": [{ \"name\": \"next\" }]\n"
+            '  "compilerOptions": {\n'
+            '    "target": "es5",\n'
+            '    "lib": ["dom", "dom.iterable", "esnext"],\n'
+            '    "allowJs": true,\n'
+            '    "skipLibCheck": true,\n'
+            '    "strict": false,\n'
+            '    "forceConsistentCasingInFileNames": true,\n'
+            '    "noEmit": true,\n'
+            '    "esModuleInterop": true,\n'
+            '    "module": "esnext",\n'
+            '    "moduleResolution": "node",\n'
+            '    "resolveJsonModule": true,\n'
+            '    "isolatedModules": true,\n'
+            '    "jsx": "preserve",\n'
+            '    "incremental": true,\n'
+            '    "plugins": [{ "name": "next" }]\n'
             "  },\n"
-            "  \"include\": [\"next-env.d.ts\", \"**/*.ts\", \"**/*.tsx\"],\n"
-            "  \"exclude\": [\"node_modules\"]\n"
+            '  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx"],\n'
+            '  "exclude": ["node_modules"]\n'
             "}\n"
             "```\n\n"
             "FILE: frontend/Dockerfile\n"
@@ -472,10 +466,10 @@ def run_portfolio_builder():
         files_3 = {
             "frontend/package.json": (
                 "{\n"
-                "  \"name\": \"frontend\",\n"
-                "  \"private\": true,\n"
-                "  \"scripts\": {\"dev\":\"next dev\",\"build\":\"next build\",\"start\":\"next start\"},\n"
-                "  \"dependencies\": {\"next\":\"14.1.0\",\"react\":\"^18.2.0\",\"react-dom\":\"^18.2.0\"}\n"
+                '  "name": "frontend",\n'
+                '  "private": true,\n'
+                '  "scripts": {"dev":"next dev","build":"next build","start":"next start"},\n'
+                '  "dependencies": {"next":"14.1.0","react":"^18.2.0","react-dom":"^18.2.0"}\n'
                 "}\n"
             ),
             "frontend/src/app/layout.tsx": (
@@ -495,25 +489,25 @@ def run_portfolio_builder():
             ),
             "frontend/tsconfig.json": (
                 "{\n"
-                "  \"compilerOptions\": {\n"
-                "    \"target\": \"es5\",\n"
-                "    \"lib\": [\"dom\", \"dom.iterable\", \"esnext\"],\n"
-                "    \"allowJs\": true,\n"
-                "    \"skipLibCheck\": true,\n"
-                "    \"strict\": false,\n"
-                "    \"forceConsistentCasingInFileNames\": true,\n"
-                "    \"noEmit\": true,\n"
-                "    \"esModuleInterop\": true,\n"
-                "    \"module\": \"esnext\",\n"
-                "    \"moduleResolution\": \"node\",\n"
-                "    \"resolveJsonModule\": true,\n"
-                "    \"isolatedModules\": true,\n"
-                "    \"jsx\": \"preserve\",\n"
-                "    \"incremental\": true,\n"
-                "    \"plugins\": [{ \"name\": \"next\" }]\n"
+                '  "compilerOptions": {\n'
+                '    "target": "es5",\n'
+                '    "lib": ["dom", "dom.iterable", "esnext"],\n'
+                '    "allowJs": true,\n'
+                '    "skipLibCheck": true,\n'
+                '    "strict": false,\n'
+                '    "forceConsistentCasingInFileNames": true,\n'
+                '    "noEmit": true,\n'
+                '    "esModuleInterop": true,\n'
+                '    "module": "esnext",\n'
+                '    "moduleResolution": "node",\n'
+                '    "resolveJsonModule": true,\n'
+                '    "isolatedModules": true,\n'
+                '    "jsx": "preserve",\n'
+                '    "incremental": true,\n'
+                '    "plugins": [{ "name": "next" }]\n'
                 "  },\n"
-                "  \"include\": [\"next-env.d.ts\", \"**/*.ts\", \"**/*.tsx\"],\n"
-                "  \"exclude\": [\"node_modules\"]\n"
+                '  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx"],\n'
+                '  "exclude": ["node_modules"]\n'
                 "}\n"
             ),
             "frontend/Dockerfile": (
@@ -524,7 +518,7 @@ def run_portfolio_builder():
     all_files.update(files_3)
     print(f"✅ Stage 3 generated {len(files_3)} files.")
 
-    # ─── STATIC SELF-HEAL LOOP (bounded 5 tries) ───
+    # ─── STATIC SELF-HEAL LOOP ───
     for i in range(5):
         ok, err = verify_static(all_files)
         if ok:
@@ -556,15 +550,14 @@ def run_portfolio_builder():
         else:
             break
 
-    # ─── PUSH DRAFT TO GITHUB (SILENT, NO TELEGRAM) ───
+    # ─── PUSH DRAFT (NO TELEGRAM HERE) ───
     repo_name = project["slug"]
     description = f"{project['name']} — {project['why']}"
-    print(f"\n📦 Pushing draft {len(all_files)} files to '{repo_name}' (no Telegram yet)...")
+    print(f"\n📦 Pushing draft {len(all_files)} files to '{repo_name}' (Telegram only after CI green)...")
 
     try:
         repo_url = github_mgr.push_files(repo_name, all_files, description)
 
-        # mark in-progress; success only after CI green
         history["in_progress"] = {
             "slug": repo_name,
             "started_at": now_iso(),
@@ -572,9 +565,8 @@ def run_portfolio_builder():
         }
         save_history(history)
 
-        # kick off closed-loop verify (no notify yet)
         trigger_verify(repo_name)
-        print(f"⏳ Waiting for verify-until-green to confirm project before notifying.")
+        print("⏳ Waiting for verify-until-green before final success notify.")
         return repo_url
 
     except Exception as e:
