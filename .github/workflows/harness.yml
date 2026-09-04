@@ -2,22 +2,27 @@ name: AI Agent Harness 24/7 Runner
 
 on:
   schedule:
-    # 1. LeetCode Shift 1 (Morning): 02:00 UTC / 07:30 IST
+    # -------------------------------------------------------------
+    # TEST SHIFT TODAY: 10:30 AM IST (05:00 UTC)
+    # -------------------------------------------------------------
+    - cron: '0 5 * * *'
+
+    # 1. LeetCode Shift 1 (Morning): 02:17 UTC / 07:47 AM IST
     - cron: '17 2 * * *'
     
-    # 2. LeetCode Shift 2 (Afternoon): 10:00 UTC / 15:30 IST
+    # 2. LeetCode Shift 2 (Afternoon): 10:17 UTC / 03:47 PM IST
     - cron: '17 10 * * *'
     
-    # 3. LeetCode Shift 3 (Night): 18:00 UTC / 23:30 IST
+    # 3. LeetCode Shift 3 (Night): 18:23 UTC / 11:53 PM IST
     - cron: '23 18 * * *'
 
-    # 4. Freelance Finder: Every day at 08:00 UTC
+    # 4. Freelance Finder: 08:17 UTC / 01:47 PM IST
     - cron: '17 8 * * *'
 
-    # 5. Job Finder: Every day at 09:00 UTC
+    # 5. Job Finder: 09:23 UTC / 02:53 PM IST
     - cron: '23 9 * * *'
 
-    # 6. Portfolio Builder: Every 3 days at 03:00 UTC
+    # 6. Portfolio Builder: Every 6 hours (checks 30h gate)
     - cron: '11 */6 * * *'
 
   workflow_dispatch:
@@ -64,15 +69,14 @@ jobs:
             echo "TARGET_AGENT=${{ inputs.agent_to_run }}" >> $GITHUB_ENV
           else
             CRON_SCHEDULE="${{ github.event.schedule }}"
-            if [ "$CRON_SCHEDULE" = "17 2 * * *" ] || [ "$CRON_SCHEDULE" = "17 10 * * *" ] || [ "$CRON_SCHEDULE" = "17 18 * * *" ]; then
-              echo "TARGET_AGENT=leetcode" >> $GITHUB_ENV
-            elif [ "$CRON_SCHEDULE" = "23 8 * * *" ]; then
+            if [ "$CRON_SCHEDULE" = "17 8 * * *" ]; then
               echo "TARGET_AGENT=freelance" >> $GITHUB_ENV
             elif [ "$CRON_SCHEDULE" = "23 9 * * *" ]; then
               echo "TARGET_AGENT=jobs" >> $GITHUB_ENV
             elif [ "$CRON_SCHEDULE" = "11 */6 * * *" ]; then
               echo "TARGET_AGENT=portfolio" >> $GITHUB_ENV
             else
+              # All other shifts (including 0 5 * * * at 10:30 AM IST) run LeetCode
               echo "TARGET_AGENT=leetcode" >> $GITHUB_ENV
             fi
           fi
