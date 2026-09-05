@@ -45,9 +45,9 @@ def get_best_groq_model():
     
     # Priority list of verified general-purpose text chat models on Groq
     preferred_order = [
+        "llama-3.1-8b-instant",
         "llama-3.3-70b-versatile",
         "llama-3.1-70b-versatile",
-        "llama-3.1-8b-instant",
         "qwen/qwen3.8-27b",
         "qwen/qwen3.6-27b",
         "mixtral-8x7b-32768",

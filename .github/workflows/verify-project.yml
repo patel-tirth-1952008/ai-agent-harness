@@ -59,9 +59,9 @@ jobs:
             pip install --upgrade pip
 
             if [ -f requirements.txt ]; then
-              # Prefer flexible install for CI reliability
-              pip install fastapi "uvicorn[standard]" pydantic python-dotenv websockets || true
-              pip install -r requirements.txt 2>&1 | tee -a /tmp/verify/backend.log || true
+              # rewrite risky pins on the fly for CI
+              sed -i 's/==.*//g' requirements.txt || true
+              pip install -r requirements.txt
             else
               pip install fastapi "uvicorn[standard]" pydantic python-dotenv websockets
             fi

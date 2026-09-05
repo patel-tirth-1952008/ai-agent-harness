@@ -36,7 +36,7 @@ def main():
     if agent in ("leetcode", "all"):
         print("\n🧠 Running LeetCode Solver...")
         from agent2_leetcode_solver import solve_leetcode_problem
-        solve_leetcode_problem()
+        solve_leetcode_problem(count=3)
         limiter.reset_run()
 
     if agent in ("freelance", "all"):

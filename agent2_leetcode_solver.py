@@ -161,5 +161,20 @@ def solve_leetcode_problem(problem=None, repo_name="leetcode-solutions"):
         return None
 
 
+def solve_multiple(count: int = 3, repo_name: str = "leetcode-solutions"):
+    """Solves 'count' number of problems sequentially in a single run."""
+    print(f"\n🔄 Solving {count} LeetCode problems in this shift...")
+    results = []
+    for i in range(count):
+        print(f"\n--- [Problem {i + 1}/{count}] ---")
+        try:
+            res = solve_leetcode_problem(repo_name=repo_name)
+            if res:
+                results.append(res)
+        except Exception as e:
+            print(f"⚠️ Batch stopped early due to error or limit: {e}")
+            break
+    return results
+
 if __name__ == "__main__":
     solve_leetcode_problem()
