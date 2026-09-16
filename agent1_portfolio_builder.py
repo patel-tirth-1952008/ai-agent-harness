@@ -59,11 +59,12 @@ PORTFOLIO_EVERY_HOURS = 0
 
 
 def get_llm(temperature=0.2):
+    # Using your verified active Groq model for fast code generation
     return LLM(
-        model="groq/openai/gpt-oss-120b",
+        model="groq/qwen/qwen3.8-27b",
         api_key=GROQ_API_KEY,
         temperature=temperature,
-        max_tokens=2048,
+        max_tokens=2500,
     )
 
 
@@ -308,8 +309,8 @@ def run_portfolio_builder():
     print("\n⚙️ [2/3] Generating Backend...")
     backend_agent = Agent(
         role="Senior Backend Engineer",
-        goal="Write runnable FastAPI backend with /health, no relative imports, no required DB.",
-        backstory="You produce production-simple backends that boot with uvicorn without external services.",
+        goal="Write a complete, runnable FastAPI backend with /health. No placeholders.",
+        backstory="You write production-ready backend servers with complete algorithmic implementations and robust APIs.",
         llm=llm,
         max_iter=MAX_AGENT_ITERATIONS,
         verbose=True,
@@ -317,19 +318,18 @@ def run_portfolio_builder():
     backend_task = Task(
         description=(
             f"Write backend files for {project['name']}.\n"
-            "Rules:\n"
+            f"Specific goal: Implement the backend logic for: {project['why']}\n\n"
+            "STRICT RULES:\n"
+            "- Write 100% COMPLETE working backend endpoints with real computation, structures, and business logic.\n"
+            "- DO NOT use placeholders like 'TODO', 'pass', '...' or '// write code here'. Every function must be fully coded.\n"
             "- Single backend/main.py must run with: python -m uvicorn main:app --app-dir backend\n"
             "- Absolutely no relative imports (no `from .something`)\n"
             "- Must include a /health endpoint returning {'status':'ok'}\n"
-            "- No mandatory Postgres/Redis to boot\n\n"
+            "- No mandatory Postgres/Redis to boot. Store state in memory (lists, dicts) with full helper classes.\n\n"
             "Format:\n"
             "FILE: backend/main.py\n"
             "```python\n"
-            "from fastapi import FastAPI\nfrom fastapi.middleware.cors import CORSMiddleware\n"
-            "app = FastAPI()\n"
-            "app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_methods=['*'], allow_headers=['*'])\n"
-            "@app.get('/')\ndef root():\n    return {'status':'online'}\n"
-            "@app.get('/health')\ndef health():\n    return {'status':'ok'}\n"
+            "# Fully code the FastAPI endpoints, database emulation, mock data, and functional logic matching this project.\n"
             "```\n\n"
             "FILE: backend/requirements.txt\n"
             "```text\n"
@@ -373,8 +373,8 @@ def run_portfolio_builder():
     print("\n🎨 [3/3] Generating Frontend...")
     frontend_agent = Agent(
         role="Senior Frontend Engineer",
-        goal="Write buildable Next.js frontend using only real npm packages.",
-        backstory="You avoid hallucinated packages and use next/react/react-dom only for base setup.",
+        goal="Write a visually stunning and complete Next.js frontend client UI using only real npm packages.",
+        backstory="You write highly professional Tailwind CSS layouts, dashboard widgets, interactive state, and fully realized client screens.",
         llm=llm,
         max_iter=MAX_AGENT_ITERATIONS,
         verbose=True,
@@ -382,7 +382,10 @@ def run_portfolio_builder():
     frontend_task = Task(
         description=(
             f"Write frontend files for {project['name']}.\n"
-            "Rules:\n"
+            f"Theme and visual UI needs to match: {project['name']} - {project['why']}\n\n"
+            "STRICT RULES:\n"
+            "- Write a complete dashboard page inside `frontend/src/app/page.tsx`. Use rich inline CSS styles or basic responsive elements.\n"
+            "- DO NOT write simple headers or single title pages. Build stateful forms, response summaries, and visual metrics components.\n"
             "- package.json must only use real packages: next, react, react-dom\n"
             "- No hallucinated packages like yjs-react\n"
             "- Must be buildable with: npm install && npm run build\n\n"
@@ -404,9 +407,8 @@ def run_portfolio_builder():
             "```\n\n"
             "FILE: frontend/src/app/page.tsx\n"
             "```tsx\n"
-            "export default function Home() {\n"
-            f"  return (<main style={{{{padding: 24}}}}><h1>{project['name']}</h1><p>{project['why']}</p></main>);\n"
-            "}\n"
+            "// Write a fully complete, interactive Next.js 14 client component with React useState hooks,\n"
+            "// active forms, responsive structure, click events, and a state display matching this project.\n"
             "```\n\n"
             "FILE: frontend/next.config.js\n"
             "```js\n"
@@ -466,7 +468,8 @@ def run_portfolio_builder():
             ),
             "frontend/src/app/page.tsx": (
                 "export default function Home() {\n"
-                f"  return (<main style={{{{padding: 24}}}}><h1>{project['name']}</h1></main>);\n"
+                f"  return (<main style={{{{padding: 24, fontFamily: 'system-ui', backgroundColor: '#0f172a', color: '#f8fafc', minHeight: '100vh'}}}}>"
+                f"<h1>{project['name']}</h1><p>{project['why']}</p></main>);\n"
                 "}\n"
             ),
             "frontend/next.config.js": (
