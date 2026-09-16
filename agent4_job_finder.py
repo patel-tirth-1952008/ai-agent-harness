@@ -9,8 +9,7 @@ load_dotenv()
 os.environ["SERPER_API_KEY"] = os.getenv("SERPER_API_KEY", "")
 os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY", "")
 
-from langchain_groq import ChatGroq
-from crewai import Agent, Task, Crew, Process
+from crewai import Agent, Task, Crew, Process, LLM
 from crewai_tools import SerperDevTool
 from limiter import limiter
 from notifier import send_notification, send_agent_report
@@ -23,10 +22,12 @@ from config import (
 
 
 def get_llm():
-    return ChatGroq(
-        temperature=0.3,
-        model_name=GROQ_MODEL,
-        groq_api_key=GROQ_API_KEY
+    # CrewAI native LLM expects 'groq/<model_name>'
+    model_name = GROQ_MODEL if GROQ_MODEL.startswith("groq/") else f"groq/{GROQ_MODEL}"
+    return LLM(
+        model=model_name,
+        api_key=GROQ_API_KEY,
+        temperature=0.3
     )
 
 
