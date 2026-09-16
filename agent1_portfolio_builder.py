@@ -1,14 +1,13 @@
 """
-Agent 1: Autonomous Senior-Level Portfolio Project Builder
+Agent 1: Autonomous Senior-Level Portfolio Project Builder (v2 - Multi-Layer Review)
 Generates complete, production-ready, full-stack applications on GitHub.
-Every repository includes:
-  - Working FastAPI backend with Pydantic schemas, validation, CORS, error handling, sample data
-  - Working Next.js 14 frontend with Tailwind CSS, dark theme, connected API fetch calls, loading/empty/error states
-  - Pytest test suite with TestClient covering all endpoints and edge cases
-  - Docker Compose orchestration running both services out of the box
-  - GitHub Actions CI/CD pipeline running automated tests
-  - Professional README with architecture diagrams, API specs, and run instructions
-  - MIT License and .env.example
+
+Architecture:
+  Phase 1 (Generate):  3 LLM calls produce backend/main.py, test_main.py, page.tsx
+  Phase 2 (Review):    3 review layers (Syntax -> Integration -> Completeness)
+  Phase 3 (Verify):    Deterministic final constraint check (no LLM)
+  Phase 4 (Emergency): 1 extra syntax fix cycle if final check fails
+  Phase 5 (Deploy):    Push to GitHub only after all checks
 """
 
 import os
@@ -80,7 +79,9 @@ except ImportError:
 MODEL_NAME = "groq/qwen/qwen3.8-27b"
 MAX_TOKENS = 2000
 TEMPERATURE = 0.2
-STAGE_DELAY = 65  # Seconds between LLM generation calls to respect Groq OTPM (1000 tokens/min)
+STAGE_DELAY = 65
+REVIEW_DELAY = 65
+MAX_REVIEW_CYCLES = 3
 
 HISTORY_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "portfolio_history.json")
 
@@ -455,7 +456,6 @@ def generate_with_groq(system_prompt: str, user_prompt: str, max_tokens: int = M
             max_tokens=max_tokens
         )
         content = response.choices[0].message.content
-        # Strip markdown code block wrapping if LLM included it
         content = re.sub(r"^" + re.escape(B3) + r"[a-zA-Z]*\n", "", content.strip())
         content = re.sub(r"\n" + re.escape(B3) + r"$", "", content.strip())
         return content.strip()
@@ -467,7 +467,7 @@ def generate_with_groq(system_prompt: str, user_prompt: str, max_tokens: int = M
 # Stage 1: Backend Code Generator
 # ---------------------------------------------------------------------------
 def generate_backend_code(blueprint: dict) -> str:
-    print("\n--- [Stage 1/4] Generating Production FastAPI Backend (main.py) ---")
+    print("\n--- [Stage 1/3] Generating Production FastAPI Backend (main.py) ---")
     system_prompt = (
         "You are a Senior Principal Python Architect. You write flawless, fully functional, production-ready FastAPI applications. "
         "Every endpoint must have full business logic with realistic in-memory or SQLite storage, Pydantic v2 models, validation, "
@@ -503,7 +503,7 @@ Strict Requirements:
 def generate_test_code(blueprint: dict, backend_code: str) -> str:
     print(f"\nWaiting {STAGE_DELAY}s for Groq rate-limit window reset...")
     time.sleep(STAGE_DELAY)
-    print("\n--- [Stage 2/4] Generating Pytest Test Suite (test_main.py) ---")
+    print("\n--- [Stage 2/3] Generating Pytest Test Suite (test_main.py) ---")
 
     system_prompt = (
         "You are a Senior QA Automation Engineer. You write comprehensive, bug-free pytest test suites using FastAPI's TestClient. "
@@ -538,12 +538,14 @@ Strict Requirements:
 def generate_frontend_code(blueprint: dict, backend_code: str) -> str:
     print(f"\nWaiting {STAGE_DELAY}s for Groq rate-limit window reset...")
     time.sleep(STAGE_DELAY)
-    print("\n--- [Stage 3/4] Generating Next.js 14 Interactive Frontend (page.tsx) ---")
+    print("\n--- [Stage 3/3] Generating Next.js 14 Interactive Frontend (page.tsx) ---")
 
     system_prompt = (
         "You are a Senior Staff Frontend Engineer specializing in React, Next.js 14 App Router, and Tailwind CSS. "
         "You create polished, modern dark-themed interactive dashboards with real fetch() API integration, loading spinners, "
-        "empty states, modal dialogs, and smooth state updates. Return ONLY the TypeScript React code file."
+        "empty states, modal dialogs, and smooth state updates. "
+        "CRITICAL: Every string literal MUST be properly terminated with matching quotes. Never leave unclosed strings, "
+        "unterminated template literals, or truncated code. Return ONLY the TypeScript React code file."
     )
     user_prompt = f"""
 Write the complete `frontend/src/app/page.tsx` for the project:
@@ -565,10 +567,276 @@ Strict Requirements:
 6. Implement beautiful dark mode UI with Tailwind CSS (e.g., bg-slate-900, bg-slate-800/60, text-white, border-slate-700, indigo/cyan accent badges).
 7. Include loading states (spinners or skeleton pulses) and error alert banners when fetch fails.
 8. Include clean inline SVG icons for key indicators.
-9. Do not use external icon packages. Return ONLY the complete page.tsx code without markdown fences.
+9. Do not use external icon packages.
+10. CRITICAL: Every string literal MUST end with the same quote it started with. No unterminated strings. No truncated code that ends mid-statement.
+11. Return ONLY the complete page.tsx code without markdown fences.
 """
     code = generate_with_groq(system_prompt, user_prompt, max_tokens=2000)
     return code
+
+# ---------------------------------------------------------------------------
+# MULTI-LAYER REVIEW ENGINE
+# ---------------------------------------------------------------------------
+def parse_review_corrections(response: str) -> dict:
+    """Extract corrected files from LLM review response using markers."""
+    corrections = {}
+    pattern = r"===FILE:\s*(.+?)===\s*\n(.*?)\n===END==="
+    matches = re.findall(pattern, response, re.DOTALL)
+    for filepath, content in matches:
+        corrections[filepath.strip()] = content.strip()
+    return corrections
+
+def review_layer_1_syntax(files: dict) -> dict:
+    """Layer 1: Syntax validation - unterminated strings, brackets, JSX tags, types."""
+    print(f"\nWaiting {REVIEW_DELAY}s for Groq rate-limit reset...")
+    time.sleep(REVIEW_DELAY)
+    print("\n=== [REVIEW LAYER 1/3] SYNTAX VALIDATION ===")
+
+    system_prompt = (
+        "You are a strict code syntax auditor. Your ONLY job is to find and fix syntax errors. "
+        "Check for: unterminated string literals, unclosed brackets/parentheses/braces, "
+        "unclosed JSX tags, missing semicolons, Python indentation errors, missing colons, "
+        "mismatched quotes, template literal errors, TypeScript type annotation errors, "
+        "truncated code that ends mid-statement. "
+        "If a file has errors, return the COMPLETE corrected file. "
+        "If a file is perfect, do NOT include it in your response."
+    )
+
+    files_text = ""
+    for path in ["backend/main.py", "backend/test_main.py", "frontend/src/app/page.tsx"]:
+        if path in files:
+            files_text += f"\n--- FILE: {path} ---\n{files[path]}\n"
+
+    user_prompt = (
+        f"Review these 3 files for SYNTAX errors ONLY:\n{files_text}\n\n"
+        "Response format:\n"
+        "- If ALL files are syntactically perfect, respond with exactly: ALL_PASS\n"
+        "- If any file has errors, return the COMPLETE corrected version using this exact format:\n"
+        "===FILE: path/to/file===\n"
+        "(complete corrected code here)\n"
+        "===END===\n"
+        "Do NOT include files that are already correct. Do NOT truncate any file."
+    )
+
+    try:
+        response = generate_with_groq(system_prompt, user_prompt, max_tokens=3000)
+    except Exception as e:
+        print(f"  [Layer 1] Review call failed: {e}. Skipping this layer.")
+        return files
+
+    if "ALL_PASS" in response:
+        print("  [Layer 1] ALL files passed syntax check!")
+        return files
+
+    corrections = parse_review_corrections(response)
+    if not corrections:
+        print("  [Layer 1] No parseable corrections found. Assuming pass.")
+        return files
+
+    for path, corrected in corrections.items():
+        if path in files:
+            if len(corrected) < len(files[path]) * 0.7:
+                print(f"  [Layer 1] WARNING: Corrected {path} seems truncated ({len(corrected)} vs {len(files[path])} chars). Keeping original.")
+            else:
+                files[path] = corrected
+                print(f"  [Layer 1] FIXED: {path}")
+        else:
+            print(f"  [Layer 1] WARNING: Unknown file path in correction: {path}")
+
+    return files
+
+def review_layer_2_integration(files: dict, blueprint: dict) -> dict:
+    """Layer 2: Integration validation - API routes match, schemas align, CORS configured."""
+    print(f"\nWaiting {REVIEW_DELAY}s for Groq rate-limit reset...")
+    time.sleep(REVIEW_DELAY)
+    print("\n=== [REVIEW LAYER 2/3] INTEGRATION VALIDATION ===")
+
+    system_prompt = (
+        "You are a Senior Full-Stack Integration Engineer. Check that frontend and backend connect correctly. "
+        "Verify: every frontend fetch() URL matches a real backend @app route path, "
+        "request body fields match Pydantic model fields, response JSON keys match TypeScript interfaces, "
+        "CORS is enabled in backend, API_BASE is used consistently in frontend, "
+        "TestClient imports match the app module. "
+        "If a file has integration errors, return the COMPLETE corrected file. "
+        "If a file is correct, do NOT include it."
+    )
+
+    endpoint_list = json.dumps(blueprint["backend_endpoints"], indent=2)
+    files_text = ""
+    for path in ["backend/main.py", "backend/test_main.py", "frontend/src/app/page.tsx"]:
+        if path in files:
+            files_text += f"\n--- FILE: {path} ---\n{files[path]}\n"
+
+    user_prompt = (
+        f"Blueprint endpoints that MUST exist in backend and be called from frontend:\n{endpoint_list}\n\n"
+        f"Review these 3 files for INTEGRATION errors:\n{files_text}\n\n"
+        "Response format:\n"
+        "- If ALL integrations are correct, respond with exactly: ALL_PASS\n"
+        "- If any file has integration errors, return the COMPLETE corrected version:\n"
+        "===FILE: path/to/file===\n"
+        "(complete corrected code here)\n"
+        "===END===\n"
+        "Do NOT truncate any file. Return complete code."
+    )
+
+    try:
+        response = generate_with_groq(system_prompt, user_prompt, max_tokens=3000)
+    except Exception as e:
+        print(f"  [Layer 2] Review call failed: {e}. Skipping this layer.")
+        return files
+
+    if "ALL_PASS" in response:
+        print("  [Layer 2] ALL integrations verified!")
+        return files
+
+    corrections = parse_review_corrections(response)
+    if not corrections:
+        print("  [Layer 2] No parseable corrections found. Assuming pass.")
+        return files
+
+    for path, corrected in corrections.items():
+        if path in files:
+            if len(corrected) < len(files[path]) * 0.7:
+                print(f"  [Layer 2] WARNING: Corrected {path} seems truncated. Keeping original.")
+            else:
+                files[path] = corrected
+                print(f"  [Layer 2] FIXED: {path}")
+
+    return files
+
+def review_layer_3_completeness(files: dict, blueprint: dict) -> dict:
+    """Layer 3: Completeness audit - all endpoints, tests, UI sections, seed data present."""
+    print(f"\nWaiting {REVIEW_DELAY}s for Groq rate-limit reset...")
+    time.sleep(REVIEW_DELAY)
+    print("\n=== [REVIEW LAYER 3/3] COMPLETENESS AUDIT ===")
+
+    system_prompt = (
+        "You are a Staff Engineer doing final code review. Check completeness against requirements. "
+        "Verify: ALL required backend endpoints are implemented with full logic (not stubs), "
+        "ALL test cases exist as def test_ functions, ALL frontend UI sections are rendered, "
+        "seed data is pre-populated, error handling exists for 404/422/500, "
+        "no placeholder comments or TODO items remain. "
+        "If a file is incomplete, return the COMPLETE corrected file. "
+        "If a file is complete, do NOT include it."
+    )
+
+    requirements = (
+        f"Required Endpoints: {json.dumps(blueprint['backend_endpoints'], indent=2)}\n"
+        f"Required Tests: {json.dumps(blueprint['test_cases'], indent=2)}\n"
+        f"Required UI Sections: {json.dumps(blueprint['frontend_sections'], indent=2)}\n"
+        f"Required Seed Data: {blueprint['sample_data']}\n"
+    )
+
+    files_text = ""
+    for path in ["backend/main.py", "backend/test_main.py", "frontend/src/app/page.tsx"]:
+        if path in files:
+            files_text += f"\n--- FILE: {path} ---\n{files[path]}\n"
+
+    user_prompt = (
+        f"REQUIREMENTS CHECKLIST:\n{requirements}\n"
+        f"Review these 3 files for COMPLETENESS:\n{files_text}\n\n"
+        "Response format:\n"
+        "- If ALL requirements are fully met, respond with exactly: ALL_PASS\n"
+        "- If any file is incomplete, return the COMPLETE corrected version:\n"
+        "===FILE: path/to/file===\n"
+        "(complete corrected code here)\n"
+        "===END===\n"
+        "Do NOT truncate. Return complete code."
+    )
+
+    try:
+        response = generate_with_groq(system_prompt, user_prompt, max_tokens=3000)
+    except Exception as e:
+        print(f"  [Layer 3] Review call failed: {e}. Skipping this layer.")
+        return files
+
+    if "ALL_PASS" in response:
+        print("  [Layer 3] ALL requirements satisfied!")
+        return files
+
+    corrections = parse_review_corrections(response)
+    if not corrections:
+        print("  [Layer 3] No parseable corrections found. Assuming pass.")
+        return files
+
+    for path, corrected in corrections.items():
+        if path in files:
+            if len(corrected) < len(files[path]) * 0.7:
+                print(f"  [Layer 3] WARNING: Corrected {path} seems truncated. Keeping original.")
+            else:
+                files[path] = corrected
+                print(f"  [Layer 3] FIXED: {path}")
+
+    return files
+
+# ---------------------------------------------------------------------------
+# FINAL CONSTRAINT CHECK (Deterministic, No LLM)
+# ---------------------------------------------------------------------------
+def final_constraint_check(files: dict, blueprint: dict) -> bool:
+    """Deterministic check that all blueprint constraints are met in the generated code."""
+    print("\n=== [FINAL CHECK] Deterministic Constraint Validation ===")
+    issues = []
+
+    backend = files.get("backend/main.py", "")
+    tests = files.get("backend/test_main.py", "")
+    frontend = files.get("frontend/src/app/page.tsx", "")
+
+    # Check backend endpoints
+    for ep in blueprint["backend_endpoints"]:
+        route_path = ep["path"].split("{")[0].rstrip("/")
+        if route_path not in backend:
+            issues.append(f"Backend missing route: {ep['path']}")
+
+    # Check CORS
+    if "CORSMiddleware" not in backend:
+        issues.append("Backend missing CORS middleware")
+
+    # Check health endpoint
+    if "/api/health" not in backend:
+        issues.append("Backend missing /api/health endpoint")
+
+    # Check tests
+    for tc in blueprint["test_cases"]:
+        if tc not in tests:
+            issues.append(f"Missing test: {tc}")
+
+    if "TestClient" not in tests:
+        issues.append("Tests missing TestClient import")
+
+    # Check frontend
+    if "'use client'" not in frontend and '"use client"' not in frontend:
+        issues.append("Frontend missing 'use client' directive")
+
+    if "fetch(" not in frontend:
+        issues.append("Frontend missing fetch() API calls")
+
+    if "API_BASE" not in frontend and "NEXT_PUBLIC_API_URL" not in frontend:
+        issues.append("Frontend missing API_BASE URL configuration")
+
+    if "useEffect" not in frontend:
+        issues.append("Frontend missing useEffect for data fetching")
+
+    # Check for common truncation indicators
+    for path, code in [("backend/main.py", backend), ("backend/test_main.py", tests), ("frontend/src/app/page.tsx", frontend)]:
+        stripped = code.strip()
+        if stripped.endswith("?") or stripped.endswith("=") or stripped.endswith("+") or stripped.endswith(","):
+            issues.append(f"{path} appears truncated (ends with operator)")
+
+    # Compile Python files
+    for path, code in [("backend/main.py", backend), ("backend/test_main.py", tests)]:
+        try:
+            compile(code, "<string>", "exec")
+        except SyntaxError as e:
+            issues.append(f"{path} has Python syntax error: line {e.lineno}: {e.msg}")
+
+    if issues:
+        print(f"  [FINAL CHECK] FAILED - {len(issues)} issues found:")
+        for issue in issues:
+            print(f"    - {issue}")
+        return False
+    else:
+        print("  [FINAL CHECK] PASSED - All constraints satisfied!")
+        return True
 
 # ---------------------------------------------------------------------------
 # Stage 4: Infrastructure & Static Files (Guaranteed 100% Working)
@@ -579,7 +847,6 @@ def get_hardcoded_files(blueprint: dict) -> dict:
     title = blueprint["title"]
     desc = blueprint["description"]
 
-    # Package.json with correct dev binding for Codespaces and proper TypeScript dependencies
     package_json = json.dumps({
         "name": f"{name}-frontend",
         "version": "1.0.0",
@@ -608,7 +875,6 @@ def get_hardcoded_files(blueprint: dict) -> dict:
         }
     }, indent=2)
 
-    # Docker Compose with no deprecated version key and correct internal networking
     docker_compose = f"""services:
   backend:
     build:
@@ -806,7 +1072,7 @@ export default function RootLayout({{
 }}
 """
 
-    ci_workflow = f"""name: Continuous Integration
+    ci_workflow = """name: Continuous Integration
 
 on:
   push:
@@ -1066,37 +1332,6 @@ SOFTWARE.
     }
 
 # ---------------------------------------------------------------------------
-# Code Validation
-# ---------------------------------------------------------------------------
-def validate_python_code(code: str) -> bool:
-    """Verifies that the generated Python code is syntactically valid."""
-    try:
-        compile(code, "<string>", "exec")
-        return True
-    except SyntaxError as e:
-        print(f"  [Validation Warning] Python syntax error: {e}")
-        return False
-
-def validate_test_code(code: str) -> bool:
-    """Verifies that the generated test suite contains TestClient and asserts."""
-    if not validate_python_code(code):
-        return False
-    if "TestClient" not in code or "def test_" not in code:
-        print("  [Validation Warning] Test code missing TestClient or test definitions.")
-        return False
-    return True
-
-def validate_frontend_code(code: str) -> bool:
-    """Verifies that the frontend page has required Next.js elements."""
-    if "'use client'" not in code and '"use client"' not in code:
-        print("  [Validation Warning] Frontend missing 'use client' directive.")
-        return False
-    if "fetch(" not in code and "useEffect" not in code:
-        print("  [Validation Warning] Frontend missing fetch or useEffect calls.")
-        return False
-    return True
-
-# ---------------------------------------------------------------------------
 # GitHub Repository Creation & File Push
 # ---------------------------------------------------------------------------
 def create_github_repo(repo_name: str, description: str) -> bool:
@@ -1151,7 +1386,6 @@ def push_files_to_github(repo_name: str, files_dict: dict) -> bool:
         "X-GitHub-Api-Version": "2022-11-28"
     }
 
-    # Fetch authenticated user's login username
     user_res = requests.get("https://api.github.com/user", headers=headers, timeout=10)
     if user_res.status_code != 200:
         print(f"  [GitHub Error] Could not fetch authenticated user: {user_res.text}")
@@ -1164,7 +1398,6 @@ def push_files_to_github(repo_name: str, files_dict: dict) -> bool:
     for path, content in files_dict.items():
         url = f"https://api.github.com/repos/{owner}/{repo_name}/contents/{path}"
         
-        # Check if file already exists to obtain its SHA (required for updates)
         sha = None
         get_res = requests.get(url, headers=headers, timeout=10)
         if get_res.status_code == 200:
@@ -1212,17 +1445,16 @@ def save_history(entry: dict):
 # ---------------------------------------------------------------------------
 def run_portfolio_builder():
     print("=================================================================")
-    print("  AGENT 1: AUTONOMOUS SENIOR PORTFOLIO PROJECT BUILDER")
-    print(f"  Model: {MODEL_NAME} | Delay: {STAGE_DELAY}s | Target: Senior Full-Stack")
+    print("  AGENT 1: PORTFOLIO BUILDER v2 (Multi-Layer Review)")
+    print(f"  Model: {MODEL_NAME} | Review Cycles: {MAX_REVIEW_CYCLES}")
     print("=================================================================")
 
-    # Select project blueprint (cycle through or pick unused)
     history = load_history()
     used_names = {h.get("name") for h in history}
 
     available_blueprints = [b for b in PROJECT_BLUEPRINTS if b["name"] not in used_names]
     if not available_blueprints:
-        print("  [Info] All blueprints deployed! Cycling from the beginning with timestamped release.")
+        print("  [Info] All blueprints deployed! Cycling from the beginning.")
         blueprint = random.choice(PROJECT_BLUEPRINTS)
     else:
         blueprint = available_blueprints[0]
@@ -1232,31 +1464,61 @@ def run_portfolio_builder():
     print(f"Repository:  {blueprint['name']}")
     print(f"Description: {blueprint['description']}")
 
-    # 1. Generate FastAPI Backend
+    # === PHASE 1: GENERATE ===
+    print("\n" + "=" * 65)
+    print("  PHASE 1: CODE GENERATION")
+    print("=" * 65)
+
     backend_code = generate_backend_code(blueprint)
-    if not validate_python_code(backend_code):
-        print("  [Fix] Attempting syntax cleanup on generated backend code...")
-        backend_code = backend_code.replace("```python", "").replace("```", "").strip()
-
-    # 2. Generate Pytest Test Suite
     test_code = generate_test_code(blueprint, backend_code)
-    if not validate_python_code(test_code):
-        test_code = test_code.replace("```python", "").replace("```", "").strip()
-
-    # 3. Generate Next.js 14 Frontend Page
     frontend_code = generate_frontend_code(blueprint, backend_code)
-    if not validate_frontend_code(frontend_code):
-        frontend_code = frontend_code.replace("```tsx", "").replace("```typescript", "").replace("```", "").strip()
 
-    # 4. Assemble All Infrastructure & Config Files
+    generated = {
+        "backend/main.py": backend_code,
+        "backend/test_main.py": test_code,
+        "frontend/src/app/page.tsx": frontend_code
+    }
+
+    # === PHASE 2: MULTI-LAYER REVIEW ===
+    print("\n" + "=" * 65)
+    print("  PHASE 2: MULTI-LAYER REVIEW PIPELINE")
+    print("=" * 65)
+
+    generated = review_layer_1_syntax(generated)
+    generated = review_layer_2_integration(generated, blueprint)
+    generated = review_layer_3_completeness(generated, blueprint)
+
+    # === PHASE 3: DETERMINISTIC FINAL CHECK ===
+    print("\n" + "=" * 65)
+    print("  PHASE 3: FINAL DETERMINISTIC CONSTRAINT CHECK")
+    print("=" * 65)
+
+    passed = final_constraint_check(generated, blueprint)
+
+    # === PHASE 4: EMERGENCY FIX CYCLE ===
+    if not passed:
+        print("\n" + "=" * 65)
+        print("  PHASE 4: EMERGENCY FIX CYCLE (Final check failed)")
+        print("=" * 65)
+        print(f"Waiting {REVIEW_DELAY}s before emergency review...")
+        time.sleep(REVIEW_DELAY)
+        generated = review_layer_1_syntax(generated)
+        passed = final_constraint_check(generated, blueprint)
+        if not passed:
+            print("\n[WARNING] Some issues remain after emergency fix. Pushing with known warnings.")
+
+    # === PHASE 5: ASSEMBLE & DEPLOY ===
+    print("\n" + "=" * 65)
+    print("  PHASE 5: ASSEMBLY & DEPLOYMENT")
+    print("=" * 65)
+
     all_files = get_hardcoded_files(blueprint)
-    all_files["backend/main.py"] = backend_code
-    all_files["backend/test_main.py"] = test_code
-    all_files["frontend/src/app/page.tsx"] = frontend_code
+    all_files["backend/main.py"] = generated["backend/main.py"]
+    all_files["backend/test_main.py"] = generated["backend/test_main.py"]
+    all_files["frontend/src/app/page.tsx"] = generated["frontend/src/app/page.tsx"]
 
-    print(f"\n[Assembly Complete] Prepared {len(all_files)} files ready for deployment.")
+    print(f"\n[Assembly Complete] {len(all_files)} files ready for deployment.")
 
-    # 5. Create GitHub Repo and Push
     repo_created = create_github_repo(blueprint["name"], blueprint["description"])
     if repo_created:
         pushed = push_files_to_github(blueprint["name"], all_files)
@@ -1267,11 +1529,13 @@ def run_portfolio_builder():
                 "repo_url": f"https://github.com/patel-tirth-1952008/{blueprint['name']}",
                 "generated_at": datetime.now(timezone.utc).isoformat(),
                 "status": "deployed",
+                "review_passed": passed,
                 "files_count": len(all_files)
             })
             print("\n=================================================================")
             print(f"  🎉 SUCCESS: Deployed '{blueprint['name']}' to GitHub!")
             print(f"  URL: https://github.com/patel-tirth-1952008/{blueprint['name']}")
+            print(f"  Review Status: {'ALL CHECKS PASSED' if passed else 'DEPLOYED WITH WARNINGS'}")
             print("=================================================================")
             return
 
