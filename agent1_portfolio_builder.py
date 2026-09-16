@@ -12,7 +12,7 @@ load_dotenv()
 # Force LiteLLM configuration & automatic retries on Rate Limits
 litellm.drop_params = True
 litellm.num_retries = 5
-litellm.request_timeout = 120
+litellm.request_timeout = 180
 os.environ["LITELLM_DROP_PARAMS"] = "true"
 
 
@@ -30,11 +30,35 @@ _orig_acompletion = litellm.acompletion
 
 def _patched_completion(*args, **kwargs):
     _clean_messages(kwargs)
+    max_attempts = 5
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return _orig_completion(*args, **kwargs)
+        except Exception as e:
+            err_str = str(e)
+            if "rate_limit" in err_str.lower() or "429" in err_str or "tokens" in err_str.lower():
+                wait_time = 35 * attempt
+                print(f"\n⏳ [Rate-Limit Shield] Groq OTPM cap reached. Auto-sleeping for {wait_time}s (attempt {attempt}/{max_attempts})...")
+                time.sleep(wait_time)
+            else:
+                raise e
     return _orig_completion(*args, **kwargs)
 
 
 async def _patched_acompletion(*args, **kwargs):
     _clean_messages(kwargs)
+    max_attempts = 5
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return await _orig_acompletion(*args, **kwargs)
+        except Exception as e:
+            err_str = str(e)
+            if "rate_limit" in err_str.lower() or "429" in err_str or "tokens" in err_str.lower():
+                wait_time = 35 * attempt
+                print(f"\n⏳ [Rate-Limit Shield] Groq OTPM cap reached. Auto-sleeping for {wait_time}s (attempt {attempt}/{max_attempts})...")
+                time.sleep(wait_time)
+            else:
+                raise e
     return await _orig_acompletion(*args, **kwargs)
 
 
@@ -59,12 +83,11 @@ PORTFOLIO_EVERY_HOURS = 0
 
 
 def get_llm(temperature=0.2):
-    # Using your verified active Groq model for fast code generation
     return LLM(
         model="groq/qwen/qwen3.8-27b",
         api_key=GROQ_API_KEY,
         temperature=temperature,
-        max_tokens=2500,
+        max_tokens=800,
     )
 
 
@@ -302,8 +325,8 @@ def run_portfolio_builder():
     all_files.update(files_1)
     print(f"✅ Stage 1 generated {len(files_1)} files.")
 
-    print("⏳ Sleeping 8s to clear token limits...")
-    time.sleep(8)
+    print("\n⏳ Sleeping 65s for full Groq OTPM quota reset...")
+    time.sleep(65)
 
     # ─── STEP 2: BACKEND ───
     print("\n⚙️ [2/3] Generating Backend...")
@@ -366,8 +389,8 @@ def run_portfolio_builder():
     all_files.update(files_2)
     print(f"✅ Stage 2 generated {len(files_2)} files.")
 
-    print("⏳ Sleeping 8s to clear token limits...")
-    time.sleep(8)
+    print("\n⏳ Sleeping 65s for full Groq OTPM quota reset...")
+    time.sleep(65)
 
     # ─── STEP 3: FRONTEND ───
     print("\n🎨 [3/3] Generating Frontend...")
