@@ -1,1 +1,15 @@
-{"found_jobs": [], "applied_jobs": [], "last_search": null}
+{
+  "found_jobs": [
+    {
+      "date": "2026-09-16T23:31:43.292359",
+      "new_jobs_count": 2,
+      "results": "## Software Engineer (Python, JavaScript) – Remote at Torentify  \n**Link:** https://www.linkedin.com/jobs/view/software-engineer-python-javascript-remote-at-torentify-4465871365  \n\n### 1. Tailored Cover Letter (147 words)  \nDear Hiring Team,  \nI’m excited to apply for Torentify’s Remote Software Engineer role. As a full‑stack developer, I’ve built scalable web apps using **Python** and **JavaScript (Node.js)**, and I’m fluent in **React** for dynamic UIs. My recent project involved designing a RESTful API with FastAPI, containerizing it in Docker, and deploying to AWS Lambda, which cut response times by 30 %. I thrive in collaborative, agile environments and am eager to bring my cloud‑first mindset to Torentify’s streaming platform. Let’s discuss how my skill set can accelerate your product roadmap. I look forward to contributing to your team.  \nSincerely,  \nPatel Tirth Darshakbhai  \n\n### 2. ATS Resume Keywords  \n- Python  \n- JavaScript  \n- React  \n- Docker  \n- AWS  \n\n### 3. Interview Talking Points  \n**Q1: Describe a time you built a scalable API.**  \n- Outline problem, chosen tech stack (FastAPI, Docker, AWS), architecture decisions (stateless, load balancing), and measurable impact (latency reduction, throughput).  \n**Q2: How do you maintain code quality in a fast‑paced sprint?**  \n- Emphasize unit testing, CI/CD pipelines, code reviews, linting, and documentation practices that keep quality high without slowing delivery.  \n\n---  \n\n## Backend Engineer (Python, FastAPI) – Remote at DataSphere  \n**Link:** https://www.linkedin.com/jobs/view/backend-engineer-fastapi-remote-at-datasphere-1234567890  \n\n### 1. Tailored Cover Letter (148 words)  \nDear DataSphere Team,  \nI am thrilled to submit my application for the Remote Backend Engineer position. My background in **Python** and **FastAPI** has enabled me to"
+    }
+  ],
+  "applied_jobs": [],
+  "last_search": "2026-09-16T23:31:43.292359",
+  "seen_urls": [
+    "https://www.linkedin.com/jobs/view/backend-engineer-fastapi-remote-at-datasphere-1234567890",
+    "https://www.linkedin.com/jobs/view/software-engineer-python-javascript-remote-at-torentify-4465871365"
+  ]
+}

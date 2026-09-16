@@ -1,11 +1,12 @@
 import os
 import re
 import json
+import time
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Set env vars BEFORE importing crewai/langchain
+# Set env vars BEFORE importing crewai
 os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY", "")
 
 from crewai import LLM
@@ -14,9 +15,34 @@ from notifier import send_agent_report
 from github_manager import github_mgr
 from config import GROQ_API_KEY, GROQ_MODEL, LEETCODE_QUEUE_FILE
 
+DEFAULT_QUEUE = {
+    "problems": [
+        {"number": 1, "title": "Two Sum", "difficulty": "Easy"},
+        {"number": 20, "title": "Valid Parentheses", "difficulty": "Easy"},
+        {"number": 21, "title": "Merge Two Sorted Lists", "difficulty": "Easy"},
+        {"number": 121, "title": "Best Time to Buy and Sell Stock", "difficulty": "Easy"},
+        {"number": 125, "title": "Valid Palindrome", "difficulty": "Easy"},
+        {"number": 226, "title": "Invert Binary Tree", "difficulty": "Easy"},
+        {"number": 242, "title": "Valid Anagram", "difficulty": "Easy"},
+        {"number": 704, "title": "Binary Search", "difficulty": "Easy"},
+        {"number": 3, "title": "Longest Substring Without Repeating Characters", "difficulty": "Medium"},
+        {"number": 11, "title": "Container With Most Water", "difficulty": "Medium"},
+        {"number": 15, "title": "3Sum", "difficulty": "Medium"},
+        {"number": 33, "title": "Search in Rotated Sorted Array", "difficulty": "Medium"},
+        {"number": 49, "title": "Group Anagrams", "difficulty": "Medium"},
+        {"number": 53, "title": "Maximum Subarray", "difficulty": "Medium"},
+        {"number": 198, "title": "House Robber", "difficulty": "Medium"},
+        {"number": 200, "title": "Number of Islands", "difficulty": "Medium"},
+        {"number": 4, "title": "Median of Two Sorted Arrays", "difficulty": "Hard"},
+        {"number": 23, "title": "Merge k Sorted Lists", "difficulty": "Hard"},
+        {"number": 42, "title": "Trapping Rain Water", "difficulty": "Hard"},
+        {"number": 295, "title": "Find Median from Data Stream", "difficulty": "Hard"}
+    ],
+    "solved": []
+}
+
 
 def get_llm():
-    # CrewAI native LLM expects 'groq/<model_name>'
     model_name = GROQ_MODEL if GROQ_MODEL.startswith("groq/") else f"groq/{GROQ_MODEL}"
     return LLM(
         model=model_name,
@@ -26,20 +52,28 @@ def get_llm():
 
 
 def load_queue():
+    os.makedirs("data", exist_ok=True)
     if os.path.exists(LEETCODE_QUEUE_FILE):
-        with open(LEETCODE_QUEUE_FILE, "r") as f:
-            return json.load(f)
-    return {"problems": [], "solved": []}
+        try:
+            with open(LEETCODE_QUEUE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict) and "problems" in data and "solved" in data:
+                    return data
+        except Exception as e:
+            print(f"⚠️ Warning: Invalid {LEETCODE_QUEUE_FILE} ({e}). Resetting with clean queue.")
+    
+    # Save default queue if missing or corrupted
+    save_queue(DEFAULT_QUEUE)
+    return DEFAULT_QUEUE
 
 
 def save_queue(data):
     os.makedirs("data", exist_ok=True)
-    with open(LEETCODE_QUEUE_FILE, "w") as f:
+    with open(LEETCODE_QUEUE_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
 
 def sanitize_filename(text):
-    """Remove all characters that break file paths."""
     text = text.lower()
     text = re.sub(r"[^a-z0-9_]", "_", text)
     text = re.sub(r"_+", "_", text)
@@ -52,7 +86,6 @@ def solve_leetcode_problem(problem=None, repo_name="leetcode-solutions"):
     print("=" * 60)
 
     limiter.check()
-
     queue = load_queue()
 
     # Pick next unsolved problem
@@ -109,14 +142,24 @@ def solve_leetcode_problem(problem=None, repo_name="leetcode-solutions"):
     try:
         limiter.check()
         
-        # Native CrewAI LLM wrapper expects direct messages or user prompts
-        response = llm.call([{"role": "user", "content": prompt}])
-        solution_text = str(response)
+        # Auto-retry wrapper for Groq rate limits
+        solution_text = None
+        for attempt in range(3):
+            try:
+                response = llm.call([{"role": "user", "content": prompt}])
+                solution_text = str(response)
+                break
+            except Exception as call_err:
+                if "429" in str(call_err) or "rate" in str(call_err).lower():
+                    print(f"⏳ Rate limit hit on attempt {attempt+1}. Retrying in 12s...")
+                    time.sleep(12)
+                else:
+                    raise call_err
 
-        if len(solution_text) < 100:
+        if not solution_text or len(solution_text) < 100:
             send_agent_report(
                 "LeetCode Solver", "error",
-                f"Solution for #{number} {title} was too short."
+                f"Solution for #{number} {title} was too short or empty."
             )
             return None
 
@@ -147,6 +190,7 @@ def solve_leetcode_problem(problem=None, repo_name="leetcode-solutions"):
             f"Progress: {solved}/{total}\n"
             f"File: {file_path}"
         )
+        print(f"✅ Successfully solved #{number} {title} and pushed to {file_path}")
 
         return repo_url
 
@@ -161,7 +205,7 @@ def solve_leetcode_problem(problem=None, repo_name="leetcode-solutions"):
 
 
 def solve_multiple(count: int = 3, repo_name: str = "leetcode-solutions"):
-    """Solves 'count' number of problems sequentially in a single run."""
+    """Solves 'count' number of problems sequentially in a single run with rate-limit pacing."""
     print(f"\n🔄 Solving {count} LeetCode problems in this shift...")
     results = []
     for i in range(count):
@@ -170,10 +214,15 @@ def solve_multiple(count: int = 3, repo_name: str = "leetcode-solutions"):
             res = solve_leetcode_problem(repo_name=repo_name)
             if res:
                 results.append(res)
+            # Pacing delay between batch problems to stay below Groq TPM limits
+            if i < count - 1:
+                print("⏳ Sleeping 8s before next problem...")
+                time.sleep(8)
         except Exception as e:
             print(f"⚠️ Batch stopped early due to error or limit: {e}")
             break
     return results
+
 
 if __name__ == "__main__":
     solve_leetcode_problem()
