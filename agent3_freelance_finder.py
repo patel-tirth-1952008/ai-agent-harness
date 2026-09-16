@@ -2,32 +2,48 @@ import os
 import json
 import time
 import requests
+import re
 from datetime import datetime
+import litellm
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Set env vars BEFORE importing tools & crewai
-os.environ["SERPER_API_KEY"] = os.getenv("SERPER_API_KEY", "")
-os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY", "")
-
-# ─── 1. CRITICAL FIX FOR GROQ 'cache_breakpoint' ERROR ───
-import litellm
+# Force LiteLLM configuration & automatic retries on Rate Limits
 litellm.drop_params = True
-litellm.modify_params = True
+litellm.num_retries = 5
+litellm.request_timeout = 120
+os.environ["LITELLM_DROP_PARAMS"] = "true"
 
-_orig_completion = litellm.completion
 
-def _safe_groq_completion(*args, **kwargs):
+def _clean_messages(kwargs):
     if "messages" in kwargs and isinstance(kwargs["messages"], list):
         for msg in kwargs["messages"]:
             if isinstance(msg, dict):
                 msg.pop("cache_breakpoint", None)
                 msg.pop("cache_control", None)
+
+
+_orig_completion = litellm.completion
+_orig_acompletion = litellm.acompletion
+
+
+def _patched_completion(*args, **kwargs):
+    _clean_messages(kwargs)
     return _orig_completion(*args, **kwargs)
 
-litellm.completion = _safe_groq_completion
-# ─────────────────────────────────────────────────────────
+
+async def _patched_acompletion(*args, **kwargs):
+    _clean_messages(kwargs)
+    return await _orig_acompletion(*args, **kwargs)
+
+
+litellm.completion = _patched_completion
+litellm.acompletion = _patched_acompletion
+
+# Set env vars BEFORE importing tools & crewai
+os.environ["SERPER_API_KEY"] = os.getenv("SERPER_API_KEY", "")
+os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY", "")
 
 from crewai import Agent, Task, Crew, Process, LLM
 from crewai.tools import tool
@@ -42,7 +58,7 @@ from config import (
 CURRENT_YEAR = str(datetime.now().year)
 
 
-# ─── 2. COMPACT SEARCH TOOL (Saves 85% Tokens to avoid Groq 7k limit) ───
+# ─── COMPACT SEARCH TOOL (Saves 85% Tokens to avoid Groq 7k limit) ───
 @tool("Search Freelance Gigs")
 def search_freelance_gigs(query: str) -> str:
     """Searches Google for live freelance job postings and returns concise, clean summaries."""
@@ -64,12 +80,11 @@ def search_freelance_gigs(query: str) -> str:
         if not organic:
             return "No recent gigs found for this query."
         
-        # Build ultra-compact summary (only title, URL, snippet)
         results = []
         for item in organic[:4]:
             title = item.get("title", "No title")
             link = item.get("link", "")
-            snippet = item.get("snippet", "")[:180]  # truncate long descriptions
+            snippet = item.get("snippet", "")[:180]
             results.append(f"• Title: {title}\n  Link: {link}\n  Details: {snippet}")
         
         return "\n\n".join(results)
@@ -93,6 +108,8 @@ def load_history():
             with open(FREELANCE_HISTORY_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, dict) and "found_gigs" in data:
+                    if "seen_urls" not in data:
+                        data["seen_urls"] = []
                     return data
         except Exception:
             pass
@@ -129,7 +146,6 @@ def run_freelance_finder():
     skill1 = skills_list[0] if len(skills_list) > 0 else "Python"
     skill2 = skills_list[1] if len(skills_list) > 1 else skill1
 
-    # ─── AGENT 1: GIG HUNTER ───
     gig_hunter = Agent(
         role="Freelance Opportunity Scout",
         goal="Identify active, high-match freelance listings using targeted searches.",
@@ -141,7 +157,6 @@ def run_freelance_finder():
         verbose=True
     )
 
-    # ─── AGENT 2: PROPOSAL WRITER ───
     proposal_writer = Agent(
         role="Freelance Proposal Specialist",
         goal="Write concise, winning project proposals under 150 words each.",
@@ -195,15 +210,33 @@ def run_freelance_finder():
             verbose=True
         )
 
-        result = str(crew.kickoff())
+        result = None
+        for attempt in range(3):
+            try:
+                result = str(crew.kickoff())
+                break
+            except Exception as crew_err:
+                err_msg = str(crew_err).lower()
+                if "429" in err_msg or "rate" in err_msg or "limit" in err_msg:
+                    wait_time = 15 * (attempt + 1)
+                    print(f"⏳ Rate limit hit. Retrying in {wait_time}s (Attempt {attempt+1}/3)...")
+                    time.sleep(wait_time)
+                else:
+                    raise crew_err
 
         if not result or len(result) < 50:
-            send_agent_report("Freelance Finder", "error", "Agent returned empty response.")
+            send_agent_report("Freelance Finder", "error", "Agent returned empty response after retries.")
             return None
 
-        # Save to history & disk
+        seen_urls = set(history.get("seen_urls", []))
+        found_urls = re.findall(r'https?://[^\s\)]+', result)
+        new_urls = [u for u in found_urls if u not in seen_urls]
+        seen_urls.update(found_urls)
+        history["seen_urls"] = list(seen_urls)[-300:]
+
         history["found_gigs"].append({
             "date": datetime.now().isoformat(),
+            "new_gigs_count": len(new_urls),
             "results": result[:2000]
         })
         history["last_search"] = datetime.now().isoformat()
@@ -213,20 +246,20 @@ def run_freelance_finder():
 
         proposal_file = save_proposals_to_file(result)
 
-        # Notify Telegram
         short_result = result[:3000] if len(result) > 3000 else result
         notification = (
             "💼 FREELANCE GIGS & PROPOSALS\n"
             "========================\n\n"
             + short_result + "\n\n"
             "========================\n"
-            f"📁 Saved to: {proposal_file}"
+            f"📁 Saved to: {proposal_file}\n"
+            f"🔗 New Unique Gigs Found: {len(new_urls)}"
         )
         send_notification(notification)
 
         send_agent_report(
             "Freelance Finder", "success",
-            "Found gigs and generated proposals. Check Telegram & data/proposals!"
+            f"Found {len(new_urls)} new gigs and generated proposals. Check Telegram!"
         )
         print("✅ Freelance Finder finished successfully.")
         return result

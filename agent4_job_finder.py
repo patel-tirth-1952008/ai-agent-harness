@@ -4,31 +4,46 @@ import time
 import requests
 import re
 from datetime import datetime
+import litellm
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Set env vars BEFORE importing tools & crewai
-os.environ["SERPER_API_KEY"] = os.getenv("SERPER_API_KEY", "")
-os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY", "")
-
-# ─── 1. CRITICAL FIX FOR GROQ 'cache_breakpoint' & PARAMS ───
-import litellm
+# Force LiteLLM configuration & automatic retries on Rate Limits
 litellm.drop_params = True
-litellm.modify_params = True
+litellm.num_retries = 5
+litellm.request_timeout = 120
+os.environ["LITELLM_DROP_PARAMS"] = "true"
 
-_orig_completion = litellm.completion
 
-def _safe_groq_completion(*args, **kwargs):
+def _clean_messages(kwargs):
     if "messages" in kwargs and isinstance(kwargs["messages"], list):
         for msg in kwargs["messages"]:
             if isinstance(msg, dict):
                 msg.pop("cache_breakpoint", None)
                 msg.pop("cache_control", None)
+
+
+_orig_completion = litellm.completion
+_orig_acompletion = litellm.acompletion
+
+
+def _patched_completion(*args, **kwargs):
+    _clean_messages(kwargs)
     return _orig_completion(*args, **kwargs)
 
-litellm.completion = _safe_groq_completion
-# ─────────────────────────────────────────────────────────────
+
+async def _patched_acompletion(*args, **kwargs):
+    _clean_messages(kwargs)
+    return await _orig_acompletion(*args, **kwargs)
+
+
+litellm.completion = _patched_completion
+litellm.acompletion = _patched_acompletion
+
+# Set env vars BEFORE importing tools & crewai
+os.environ["SERPER_API_KEY"] = os.getenv("SERPER_API_KEY", "")
+os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY", "")
 
 from crewai import Agent, Task, Crew, Process, LLM
 from crewai.tools import tool
@@ -43,7 +58,7 @@ from config import (
 CURRENT_YEAR = str(datetime.now().year)
 
 
-# ─── 2. COMPACT SEARCH TOOL (Saves 85% Tokens) ───
+# ─── COMPACT SEARCH TOOL (Saves 85% Tokens) ───
 @tool("Search Tech Jobs")
 def search_tech_jobs(query: str) -> str:
     """Searches Google for live software engineering job postings and returns concise, clean summaries."""
@@ -78,7 +93,6 @@ def search_tech_jobs(query: str) -> str:
 
 
 def get_llm():
-    # Use gpt-oss-20b or gpt-oss-120b to avoid the 1k OTPM throttle on qwen
     model = GROQ_MODEL
     if "qwen" in model.lower():
         model = "openai/gpt-oss-20b"
@@ -93,7 +107,6 @@ def get_llm():
 
 
 def load_history():
-    """Self-healing history loader."""
     os.makedirs("data", exist_ok=True)
     if os.path.exists(JOB_HISTORY_FILE):
         try:
@@ -115,7 +128,6 @@ def save_history(history):
 
 
 def save_applications_to_file(result_text):
-    """Saves tailored cover letters and interview prep to disk."""
     os.makedirs("data/applications", exist_ok=True)
     timestamp = datetime.now().strftime("%Y-%m-%d_%H%M")
     filepath = f"data/applications/job_prep_{timestamp}.md"
@@ -139,7 +151,6 @@ def run_job_finder():
     skill1 = skills_list[0] if len(skills_list) > 0 else "Python"
     skill2 = skills_list[1] if len(skills_list) > 1 else skill1
 
-    # ─── AGENT 1: JOB SCOUT ───
     job_scout = Agent(
         role="Senior Technical Recruiter",
         goal="Find active software engineering job openings matching candidate skills.",
@@ -151,7 +162,6 @@ def run_job_finder():
         verbose=True
     )
 
-    # ─── AGENT 2: APPLICATION PREP COACH ───
     app_prep = Agent(
         role="Career Coach and ATS Specialist",
         goal="Write tailored, high-converting cover letters and interview prep packages under 180 words each.",
@@ -208,7 +218,6 @@ def run_job_finder():
             verbose=True
         )
 
-        # ─── 3. RETRY LOOP FOR KICKOFF ───
         result = None
         for attempt in range(3):
             try:
@@ -227,14 +236,12 @@ def run_job_finder():
             send_agent_report("Job Finder", "error", "Agent returned empty response after retries.")
             return None
 
-        # ─── 4. UNIQUE JOB TRACKING (DEDUPLICATION) ───
         seen_urls = set(history.get("seen_urls", []))
         found_urls = re.findall(r'https?://[^\s\)]+', result)
         new_urls = [u for u in found_urls if u not in seen_urls]
         seen_urls.update(found_urls)
         history["seen_urls"] = list(seen_urls)[-300:]
 
-        # Save to history & disk
         history["found_jobs"].append({
             "date": datetime.now().isoformat(),
             "new_jobs_count": len(new_urls),
@@ -247,7 +254,6 @@ def run_job_finder():
 
         prep_file = save_applications_to_file(result)
 
-        # Send Telegram notification
         short_result = result[:3000] if len(result) > 3000 else result
         notification = (
             "🎯 JOB MATCHES & APPLICATION PACKAGES\n"

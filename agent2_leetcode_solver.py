@@ -2,9 +2,42 @@ import os
 import re
 import json
 import time
+import litellm
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Force LiteLLM configuration & automatic retries on Rate Limits
+litellm.drop_params = True
+litellm.num_retries = 5
+litellm.request_timeout = 120
+os.environ["LITELLM_DROP_PARAMS"] = "true"
+
+
+def _clean_messages(kwargs):
+    if "messages" in kwargs and isinstance(kwargs["messages"], list):
+        for msg in kwargs["messages"]:
+            if isinstance(msg, dict):
+                msg.pop("cache_breakpoint", None)
+                msg.pop("cache_control", None)
+
+
+_orig_completion = litellm.completion
+_orig_acompletion = litellm.acompletion
+
+
+def _patched_completion(*args, **kwargs):
+    _clean_messages(kwargs)
+    return _orig_completion(*args, **kwargs)
+
+
+async def _patched_acompletion(*args, **kwargs):
+    _clean_messages(kwargs)
+    return await _orig_acompletion(*args, **kwargs)
+
+
+litellm.completion = _patched_completion
+litellm.acompletion = _patched_acompletion
 
 # Set env vars BEFORE importing crewai
 os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY", "")
@@ -62,7 +95,6 @@ def load_queue():
         except Exception as e:
             print(f"⚠️ Warning: Invalid {LEETCODE_QUEUE_FILE} ({e}). Resetting with clean queue.")
     
-    # Save default queue if missing or corrupted
     save_queue(DEFAULT_QUEUE)
     return DEFAULT_QUEUE
 
@@ -88,7 +120,6 @@ def solve_leetcode_problem(problem=None, repo_name="leetcode-solutions"):
     limiter.check()
     queue = load_queue()
 
-    # Pick next unsolved problem
     if problem is None:
         unsolved = [
             p for p in queue["problems"]
@@ -142,7 +173,6 @@ def solve_leetcode_problem(problem=None, repo_name="leetcode-solutions"):
     try:
         limiter.check()
         
-        # Auto-retry wrapper for Groq rate limits
         solution_text = None
         for attempt in range(3):
             try:
@@ -163,12 +193,10 @@ def solve_leetcode_problem(problem=None, repo_name="leetcode-solutions"):
             )
             return None
 
-        # Build safe file path
         folder = difficulty.lower()
         safe_name = sanitize_filename(title)
         file_path = f"{folder}/{number:04d}_{safe_name}.md"
 
-        # Push to GitHub
         repo_url = github_mgr.push_single_file(
             repo_name=repo_name,
             file_path=file_path,
@@ -176,7 +204,6 @@ def solve_leetcode_problem(problem=None, repo_name="leetcode-solutions"):
             description="LeetCode Solutions Archive"
         )
 
-        # Mark as solved
         if title not in queue["solved"]:
             queue["solved"].append(title)
             save_queue(queue)
@@ -205,7 +232,6 @@ def solve_leetcode_problem(problem=None, repo_name="leetcode-solutions"):
 
 
 def solve_multiple(count: int = 3, repo_name: str = "leetcode-solutions"):
-    """Solves 'count' number of problems sequentially in a single run with rate-limit pacing."""
     print(f"\n🔄 Solving {count} LeetCode problems in this shift...")
     results = []
     for i in range(count):
@@ -214,7 +240,6 @@ def solve_multiple(count: int = 3, repo_name: str = "leetcode-solutions"):
             res = solve_leetcode_problem(repo_name=repo_name)
             if res:
                 results.append(res)
-            # Pacing delay between batch problems to stay below Groq TPM limits
             if i < count - 1:
                 print("⏳ Sleeping 8s before next problem...")
                 time.sleep(8)

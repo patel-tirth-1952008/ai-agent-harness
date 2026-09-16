@@ -54,7 +54,7 @@ from config import (
 from limiter import limiter
 from github_manager import github_mgr
 
-# 1 project per day (Currently Bypassed Below)
+# ─── TIMER OVERRIDE: 0 Hours (Always runs immediately) ───
 PORTFOLIO_EVERY_HOURS = 0
 
 
@@ -69,16 +69,6 @@ def get_llm(temperature=0.2):
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
-
-
-def hours_since(iso_ts):
-    if not iso_ts:
-        return 10**9
-    try:
-        dt = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
-        return (datetime.now(timezone.utc) - dt).total_seconds() / 3600.0
-    except Exception:
-        return 10**9
 
 
 def load_history():
@@ -156,7 +146,6 @@ INDUSTRY_PROJECTS = [
 
 
 def pick_next_project(history):
-    """Return next unbuilt project, or None if all 50 are done."""
     built = set(history.get("built_projects", []))
     remaining = [p for p in INDUSTRY_PROJECTS if p["slug"] not in built]
 
@@ -248,20 +237,11 @@ def trigger_verify(repo_name: str):
 
 def run_portfolio_builder():
     print("\n" + "=" * 60)
-    print("  AGENT 1: PORTFOLIO BUILDER (24h gate, 50 projects, silent draft)")
+    print("  AGENT 1: PORTFOLIO BUILDER (No cooldown, cloud mode)")
     print("=" * 60)
 
     limiter.check()
     history = load_history()
-
-    # Bypassed gates to allow immediate local run/test
-    # elapsed = hours_since(history.get("last_success_at"))
-    # if elapsed < PORTFOLIO_EVERY_HOURS:
-    #     print(f"⏳ Skip: only {elapsed:.1f}h since last successful project (need {PORTFOLIO_EVERY_HOURS}h).")
-    #     return None
-    # if history.get("in_progress"):
-    #     print(f"⏳ Skip: project already in progress: {history['in_progress']}")
-    #     return None
 
     project = pick_next_project(history)
     if project is None:
@@ -321,7 +301,6 @@ def run_portfolio_builder():
     all_files.update(files_1)
     print(f"✅ Stage 1 generated {len(files_1)} files.")
 
-    # ⏳ Sleep 8s to allow token bucket window to slide down
     print("⏳ Sleeping 8s to clear token limits...")
     time.sleep(8)
 
@@ -387,7 +366,6 @@ def run_portfolio_builder():
     all_files.update(files_2)
     print(f"✅ Stage 2 generated {len(files_2)} files.")
 
-    # ⏳ Sleep 8s to allow token bucket window to slide down
     print("⏳ Sleeping 8s to clear token limits...")
     time.sleep(8)
 
@@ -560,7 +538,7 @@ def run_portfolio_builder():
         else:
             break
 
-    # ─── PUSH DRAFT (NO TELEGRAM HERE) ───
+    # ─── PUSH DRAFT ───
     repo_name = project["slug"]
     description = f"{project['name']} — {project['why']}"
     print(f"\n📦 Pushing draft {len(all_files)} files to '{repo_name}' (Telegram only after CI green)...")
