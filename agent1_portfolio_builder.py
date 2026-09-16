@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import time
 import subprocess
 from datetime import datetime, timezone
 import litellm
@@ -8,8 +9,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Force LiteLLM to drop Groq-incompatible params
+# Force LiteLLM configuration & automatic retries on Rate Limits
 litellm.drop_params = True
+litellm.num_retries = 5
+litellm.request_timeout = 120
 os.environ["LITELLM_DROP_PARAMS"] = "true"
 
 
@@ -45,24 +48,22 @@ os.environ["SERPER_API_KEY"] = os.getenv("SERPER_API_KEY", "")
 from crewai import Agent, Task, Crew, Process, LLM
 from config import (
     GROQ_API_KEY,
-    GROQ_MODEL,
     MAX_AGENT_ITERATIONS,
     PORTFOLIO_HISTORY_FILE,
 )
 from limiter import limiter
 from github_manager import github_mgr
 
-# 1 project per day
-PORTFOLIO_EVERY_HOURS = 24
+# 1 project per day (Currently Bypassed Below)
+PORTFOLIO_EVERY_HOURS = 0
 
 
 def get_llm(temperature=0.2):
-    clean_model = GROQ_MODEL.replace("groq/", "").replace("openai/", "")
     return LLM(
-        model=f"openai/{clean_model}",
-        base_url="https://api.groq.com/openai/v1",
+        model="groq/openai/gpt-oss-120b",
         api_key=GROQ_API_KEY,
         temperature=temperature,
+        max_tokens=2048,
     )
 
 
@@ -253,14 +254,14 @@ def run_portfolio_builder():
     limiter.check()
     history = load_history()
 
-    elapsed = hours_since(history.get("last_success_at"))
-    if elapsed < PORTFOLIO_EVERY_HOURS:
-        print(f"⏳ Skip: only {elapsed:.1f}h since last successful project (need {PORTFOLIO_EVERY_HOURS}h).")
-        return None
-
-    if history.get("in_progress"):
-        print(f"⏳ Skip: project already in progress: {history['in_progress']}")
-        return None
+    # Bypassed gates to allow immediate local run/test
+    # elapsed = hours_since(history.get("last_success_at"))
+    # if elapsed < PORTFOLIO_EVERY_HOURS:
+    #     print(f"⏳ Skip: only {elapsed:.1f}h since last successful project (need {PORTFOLIO_EVERY_HOURS}h).")
+    #     return None
+    # if history.get("in_progress"):
+    #     print(f"⏳ Skip: project already in progress: {history['in_progress']}")
+    #     return None
 
     project = pick_next_project(history)
     if project is None:
@@ -319,6 +320,10 @@ def run_portfolio_builder():
         }
     all_files.update(files_1)
     print(f"✅ Stage 1 generated {len(files_1)} files.")
+
+    # ⏳ Sleep 8s to allow token bucket window to slide down
+    print("⏳ Sleeping 8s to clear token limits...")
+    time.sleep(8)
 
     # ─── STEP 2: BACKEND ───
     print("\n⚙️ [2/3] Generating Backend...")
@@ -381,6 +386,10 @@ def run_portfolio_builder():
         }
     all_files.update(files_2)
     print(f"✅ Stage 2 generated {len(files_2)} files.")
+
+    # ⏳ Sleep 8s to allow token bucket window to slide down
+    print("⏳ Sleeping 8s to clear token limits...")
+    time.sleep(8)
 
     # ─── STEP 3: FRONTEND ───
     print("\n🎨 [3/3] Generating Frontend...")
@@ -524,6 +533,7 @@ def run_portfolio_builder():
         if ok:
             break
         print(f"🩹 Static repair round {i+1}: {err}")
+        time.sleep(5)
         fix_agent = Agent(
             role="Repair Engineer",
             goal="Fix broken generated files based on validation errors",
