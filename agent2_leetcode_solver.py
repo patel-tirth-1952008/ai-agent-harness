@@ -8,7 +8,7 @@ load_dotenv()
 # Set env vars BEFORE importing crewai/langchain
 os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY", "")
 
-from langchain_groq import ChatGroq
+from crewai import LLM
 from limiter import limiter
 from notifier import send_agent_report
 from github_manager import github_mgr
@@ -16,10 +16,12 @@ from config import GROQ_API_KEY, GROQ_MODEL, LEETCODE_QUEUE_FILE
 
 
 def get_llm():
-    return ChatGroq(
-        temperature=0.1,
-        model_name=GROQ_MODEL,
-        groq_api_key=GROQ_API_KEY
+    # CrewAI native LLM expects 'groq/<model_name>'
+    model_name = GROQ_MODEL if GROQ_MODEL.startswith("groq/") else f"groq/{GROQ_MODEL}"
+    return LLM(
+        model=model_name,
+        api_key=GROQ_API_KEY,
+        temperature=0.1
     )
 
 
@@ -106,13 +108,10 @@ def solve_leetcode_problem(problem=None, repo_name="leetcode-solutions"):
 
     try:
         limiter.check()
-        response = llm.invoke(prompt)
-
-        # Extract text content safely
-        if hasattr(response, "content"):
-            solution_text = str(response.content)
-        else:
-            solution_text = str(response)
+        
+        # Native CrewAI LLM wrapper expects direct messages or user prompts
+        response = llm.call([{"role": "user", "content": prompt}])
+        solution_text = str(response)
 
         if len(solution_text) < 100:
             send_agent_report(
