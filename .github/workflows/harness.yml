@@ -7,13 +7,13 @@ on:
     # -------------------------------------------------------------
     - cron: '0 5 * * *'
 
-    # 1. LeetCode Shift 1 (Morning): 02:17 UTC / 07:47 AM IST
+    # 1. LeetCode Shift 1 (Morning - 4 Problems): 02:17 UTC / 07:47 AM IST
     - cron: '17 2 * * *'
     
-    # 2. LeetCode Shift 2 (Afternoon): 10:17 UTC / 03:47 PM IST
+    # 2. LeetCode Shift 2 (Afternoon - 3 Problems): 10:17 UTC / 03:47 PM IST
     - cron: '17 10 * * *'
     
-    # 3. LeetCode Shift 3 (Night): 18:23 UTC / 11:53 PM IST
+    # 3. LeetCode Shift 3 (Night - 3 Problems): 18:23 UTC / 11:53 PM IST
     - cron: '23 18 * * *'
 
     # 4. Freelance Finder: 08:17 UTC / 01:47 PM IST
@@ -38,6 +38,10 @@ on:
           - freelance
           - jobs
           - all
+      leetcode_batch:
+        description: 'Number of LeetCode problems to solve (if leetcode selected)'
+        required: false
+        default: '4'
 
 permissions:
   contents: write
@@ -62,11 +66,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 4. Determine Which Agent to Run
+      - name: 4. Determine Which Agent & Batch Size to Run
         id: select_agent
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "TARGET_AGENT=${{ inputs.agent_to_run }}" >> $GITHUB_ENV
+            echo "LEETCODE_BATCH_SIZE=${{ inputs.leetcode_batch || '4' }}" >> $GITHUB_ENV
           else
             CRON_SCHEDULE="${{ github.event.schedule }}"
             if [ "$CRON_SCHEDULE" = "17 8 * * *" ]; then
@@ -75,9 +80,19 @@ jobs:
               echo "TARGET_AGENT=jobs" >> $GITHUB_ENV
             elif [ "$CRON_SCHEDULE" = "11 */6 * * *" ]; then
               echo "TARGET_AGENT=portfolio" >> $GITHUB_ENV
-            else
-              # All other shifts (including 0 5 * * * at 10:30 AM IST) run LeetCode
+            elif [ "$CRON_SCHEDULE" = "17 2 * * *" ]; then
               echo "TARGET_AGENT=leetcode" >> $GITHUB_ENV
+              echo "LEETCODE_BATCH_SIZE=4" >> $GITHUB_ENV
+            elif [ "$CRON_SCHEDULE" = "17 10 * * *" ]; then
+              echo "TARGET_AGENT=leetcode" >> $GITHUB_ENV
+              echo "LEETCODE_BATCH_SIZE=3" >> $GITHUB_ENV
+            elif [ "$CRON_SCHEDULE" = "23 18 * * *" ]; then
+              echo "TARGET_AGENT=leetcode" >> $GITHUB_ENV
+              echo "LEETCODE_BATCH_SIZE=3" >> $GITHUB_ENV
+            else
+              # Test shift (0 5 * * *) or fallback default
+              echo "TARGET_AGENT=leetcode" >> $GITHUB_ENV
+              echo "LEETCODE_BATCH_SIZE=4" >> $GITHUB_ENV
             fi
           fi
 
@@ -95,6 +110,7 @@ jobs:
           YOUR_SKILLS: ${{ secrets.YOUR_SKILLS }}
           YOUR_EXPERIENCE_YEARS: ${{ secrets.YOUR_EXPERIENCE_YEARS }}
           YOUR_RESUME_SUMMARY: ${{ secrets.YOUR_RESUME_SUMMARY }}
+          LEETCODE_BATCH_SIZE: ${{ env.LEETCODE_BATCH_SIZE || '3' }}
           LITELLM_DROP_PARAMS: "true"
         run: |
           python run_once.py ${{ env.TARGET_AGENT }}
@@ -103,8 +119,8 @@ jobs:
         run: |
           git config --global user.name "GitHub Action Bot"
           git config --global user.email "action@github.com"
-          git add data/
-          git diff --quiet && git diff --staged --quiet || (git commit -m "🤖 Auto-update data history [skip ci]" && git push)
+          git add data/ leetcode_solutions/ leetcode_queue.json 2>/dev/null || git add data/
+          git diff --quiet && git diff --staged --quiet || (git commit -m "🤖 Auto-update data history & leetcode queue [skip ci]" && git push)
 
       - name: 7. Trigger Level-2 Verify (Portfolio only)
         if: env.TARGET_AGENT == 'portfolio' || env.TARGET_AGENT == 'all'
