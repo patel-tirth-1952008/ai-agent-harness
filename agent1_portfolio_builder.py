@@ -11,6 +11,7 @@ import base64
 from datetime import datetime
 
 # Monkeypatch CrewAI / LiteLLM bug: remove cache_breakpoint and cache_control from messages to prevent HTTP 400
+# AND strictly cap max_tokens globally to prevent Groq Output Tokens Per Minute (OTPM) rate limit failures.
 try:
     import litellm
     _orig_completion = litellm.completion
@@ -31,6 +32,13 @@ try:
             kwargs["messages"] = _clean_messages(kwargs["messages"])
         if "LITELLM_DROP_PARAMS" not in os.environ:
             os.environ["LITELLM_DROP_PARAMS"] = "True"
+        
+        # STRICT Token Safety Shield for Groq Free Limit (1000 OTPM max)
+        if "max_tokens" in kwargs:
+            kwargs["max_tokens"] = min(kwargs["max_tokens"], 900)
+        else:
+            kwargs["max_tokens"] = 900
+            
         kwargs["num_retries"] = 5
         kwargs["retry_delay"] = 35.0
         return _orig_completion(*args, **kwargs)
@@ -40,6 +48,12 @@ try:
             kwargs["messages"] = _clean_messages(kwargs["messages"])
         if "LITELLM_DROP_PARAMS" not in os.environ:
             os.environ["LITELLM_DROP_PARAMS"] = "True"
+            
+        if "max_tokens" in kwargs:
+            kwargs["max_tokens"] = min(kwargs["max_tokens"], 900)
+        else:
+            kwargs["max_tokens"] = 900
+            
         kwargs["num_retries"] = 5
         kwargs["retry_delay"] = 35.0
         return _orig_acompletion(*args, **kwargs)
@@ -54,7 +68,7 @@ B3 = chr(96) * 3
 
 # GLOBAL AGENT CONFIGURATION
 MODEL_NAME = "groq/qwen/qwen3.8-27b"
-MAX_TOKENS = 950
+MAX_TOKENS = 900
 STAGE_DELAY = 65
 REVIEW_DELAY = 65
 MAX_REVIEW_CYCLES = 3
@@ -535,8 +549,8 @@ def select_next_blueprint():
     return BLUEPRINTS[0]
 
 
-def generate_with_groq(system_prompt, user_prompt, max_tokens=950):
-    max_tokens = min(max_tokens, 950)
+def generate_with_groq(system_prompt, user_prompt, max_tokens=900):
+    max_tokens = min(max_tokens, 900)
     user_prompt = user_prompt.strip()
     system_prompt = system_prompt.strip()
     messages = [
@@ -589,7 +603,7 @@ def generate_backend_code(blueprint):
         f"SAMPLE DATA:\n{json.dumps(blueprint['sample_data'], indent=2)}\n"
         "Write the complete main.py. All POST endpoints must mutate the in-memory dataset."
     )
-    return generate_with_groq(sys_prompt, user_prompt, max_tokens=950)
+    return generate_with_groq(sys_prompt, user_prompt, max_tokens=900)
 
 
 def generate_test_code(blueprint, backend_code):
@@ -611,7 +625,7 @@ def generate_test_code(blueprint, backend_code):
         f"TARGET CODE:\n{B3}python\n{backend_code}\n{B3}\n"
         "Write the complete test_main.py."
     )
-    return generate_with_groq(sys_prompt, user_prompt, max_tokens=950)
+    return generate_with_groq(sys_prompt, user_prompt, max_tokens=900)
 
 
 def generate_page_code(blueprint):
@@ -638,7 +652,7 @@ def generate_page_code(blueprint):
         f"API ENDPOINTS:\n{json.dumps(blueprint['backend_endpoints'], indent=2)}\n"
         "Write the complete page.tsx with robust state-management handlers."
     )
-    return generate_with_groq(sys_prompt, user_prompt, max_tokens=950)
+    return generate_with_groq(sys_prompt, user_prompt, max_tokens=900)
 
 
 def parse_code_block(raw_text, language="python"):
@@ -666,7 +680,7 @@ def run_layer1_review(file_path, code_text):
         "If errors found, return corrected code inside markdown blocks. No descriptions."
     )
     user_prompt = f"FILE: {file_path}\nCODE:\n{code_text}"
-    review_out = generate_with_groq(sys_prompt, user_prompt, max_tokens=950)
+    review_out = generate_with_groq(sys_prompt, user_prompt, max_tokens=900)
     if "ALL_PASS" in review_out:
         return "ALL_PASS", code_text
     lang = "python" if file_path.endswith(".py") else "typescript"
@@ -687,7 +701,7 @@ def run_layer2_review(backend_code, frontend_code):
         "If bugs found, output corrected page.tsx inside typescript markdown blocks."
     )
     user_prompt = f"BACKEND:\n{backend_code}\n\nFRONTEND:\n{frontend_code}"
-    review_out = generate_with_groq(sys_prompt, user_prompt, max_tokens=950)
+    review_out = generate_with_groq(sys_prompt, user_prompt, max_tokens=900)
     if "ALL_PASS" in review_out:
         return "ALL_PASS", frontend_code
     corrected = parse_code_block(review_out, "typescript")
@@ -707,7 +721,7 @@ def run_layer3_review(file_path, code_text, blueprint):
         "If omissions found, return fully expanded file inside markdown blocks."
     )
     user_prompt = f"BLUEPRINT:\n{json.dumps(blueprint, indent=2)}\n\nFILE: {file_path}\nCODE:\n{code_text}"
-    review_out = generate_with_groq(sys_prompt, user_prompt, max_tokens=950)
+    review_out = generate_with_groq(sys_prompt, user_prompt, max_tokens=900)
     if "ALL_PASS" in review_out:
         return "ALL_PASS", code_text
     lang = "python" if file_path.endswith(".py") else "typescript"
@@ -762,7 +776,7 @@ def emergency_correct_code(path, code, issues):
         "Ensure no unclosed strings, brackets, or blocks."
     )
     user_prompt = f"FILE: {path}\nISSUES:\n" + "\n".join(issues) + f"\n\nCODE:\n{code}"
-    out = generate_with_groq(sys_prompt, user_prompt, max_tokens=950)
+    out = generate_with_groq(sys_prompt, user_prompt, max_tokens=900)
     lang = "python" if path.endswith(".py") else "typescript"
     corrected = parse_code_block(out, lang)
     if len(corrected) > len(code) * 0.70:

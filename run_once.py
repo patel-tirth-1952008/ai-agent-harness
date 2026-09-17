@@ -5,6 +5,39 @@ import traceback
 
 print("🤖 Orchestrating AI Agent Runner...")
 
+# --- FLEXIBLE COMMAND LINE & ENV PARSING ---
+args = sys.argv[1:]
+agent_to_run = ""
+leetcode_batch = "4"
+
+VALID_AGENTS = ["portfolio", "leetcode", "freelance", "jobs", "all"]
+
+# 1. Parse positional arguments directly (e.g., "python run_once.py jobs")
+for arg in args:
+    if arg.lower() in VALID_AGENTS:
+        agent_to_run = arg.lower()
+    elif arg.isdigit():
+        leetcode_batch = arg
+
+# 2. Fallback to --agent flags if present (e.g., "python run_once.py --agent jobs")
+for i, arg in enumerate(args):
+    if arg in ["--agent", "-a"] and i + 1 < len(args):
+        agent_to_run = args[i + 1].lower()
+    if arg in ["--leetcode-batch", "-l"] and i + 1 < len(args):
+        leetcode_batch = args[i + 1]
+
+# 3. Fallback to environment variables
+if not agent_to_run:
+    agent_to_run = os.environ.get("AGENT_TO_RUN", "").lower()
+if not leetcode_batch:
+    leetcode_batch = os.environ.get("LEETCODE_BATCH", "4")
+
+# Final default fallback
+if not agent_to_run:
+    agent_to_run = "all"
+
+print(f"📋 Configuration - Agent to Run: '{agent_to_run}' | LeetCode Batch size: {leetcode_batch}")
+
 # --- RESILIENT IMPORTS WITH FALLBACKS ---
 
 # 1. Agent 1: Portfolio Builder
@@ -15,7 +48,7 @@ except ImportError as e:
     def run_portfolio_builder():
         print("❌ Portfolio Builder is currently unavailable.")
 
-# 2. Agent 2: LeetCode Solver (with fallback to multiple naming patterns)
+# 2. Agent 2: LeetCode Solver
 run_leetcode_solver = None
 try:
     from agent2_leetcode_solver import solve_leetcode_problem as run_leetcode_solver
@@ -57,22 +90,6 @@ except ImportError:
 
 
 def main():
-    # Determine which agent to run from command-line args or environment variables
-    agent_to_run = os.environ.get("AGENT_TO_RUN", "").lower()
-    leetcode_batch = os.environ.get("LEETCODE_BATCH", "4")
-
-    print(f"📋 Configuration - Agent to Run: '{agent_to_run}' | LeetCode Batch size: {leetcode_batch}")
-
-    if not agent_to_run:
-        # Fallback parsing command line arguments if workflow dispatch is manual
-        import argparse
-        parser = argparse.ArgumentParser(description="AI Agent Runner Trigger")
-        parser.add_argument("--agent", type=str, default="all", help="Agent to run")
-        parser.add_argument("--leetcode-batch", type=str, default="4", help="Leetcode batch count")
-        args = parser.parse_args()
-        agent_to_run = args.agent.lower()
-        leetcode_batch = args.leetcode_batch
-
     try:
         if agent_to_run in ["portfolio", "all"]:
             print("\n🏗️ Running Portfolio Builder...")
@@ -81,10 +98,8 @@ def main():
         if agent_to_run in ["leetcode", "all"]:
             print("\n🧠 Running LeetCode Solver...")
             try:
-                # Try running with batch count argument
                 run_leetcode_solver(batch_count=int(leetcode_batch))
             except TypeError:
-                # Fallback to zero-argument call if agent2 has a different signature
                 run_leetcode_solver()
 
         if agent_to_run in ["freelance", "all"]:
