@@ -3,29 +3,32 @@ import json
 import time
 import requests
 import re
+import subprocess
 from datetime import datetime
-import litellm
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # Force LiteLLM configuration & automatic retries on Rate Limits
+import litellm
 litellm.drop_params = True
 litellm.num_retries = 5
 litellm.request_timeout = 120
 os.environ["LITELLM_DROP_PARAMS"] = "true"
 
+_orig_completion = litellm.completion
+_orig_acompletion = litellm.acompletion
+
 
 def _clean_messages(kwargs):
     if "messages" in kwargs and isinstance(kwargs["messages"], list):
+        cleaned = []
         for msg in kwargs["messages"]:
             if isinstance(msg, dict):
-                msg.pop("cache_breakpoint", None)
-                msg.pop("cache_control", None)
-
-
-_orig_completion = litellm.completion
-_orig_acompletion = litellm.acompletion
+                cleaned.append({k: v for k, v in msg.items() if k not in ["cache_breakpoint", "cache_control"]})
+            else:
+                cleaned.append(msg)
+        kwargs["messages"] = cleaned
 
 
 def _patched_completion(*args, **kwargs):
@@ -47,22 +50,46 @@ os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY", "")
 
 from crewai import Agent, Task, Crew, Process, LLM
 from crewai.tools import tool
-from limiter import limiter
-from notifier import send_notification, send_agent_report
-from config import (
-    GROQ_API_KEY, SERPER_API_KEY, GROQ_MODEL,
-    YOUR_NAME, YOUR_SKILLS, YOUR_EXPERIENCE_YEARS,
-    YOUR_RESUME_SUMMARY, MAX_AGENT_RPM, JOB_HISTORY_FILE
-)
+
+# Fallback-safe configuration imports
+try:
+    from limiter import limiter
+except ImportError:
+    class DummyLimiter:
+        def check(self): pass
+    limiter = DummyLimiter()
+
+try:
+    from notifier import send_notification, send_agent_report
+except ImportError:
+    def send_notification(msg): print(f"[Notification] {msg[:100]}...")
+    def send_agent_report(agent, status, msg): print(f"[{agent} - {status}] {msg}")
+
+try:
+    from config import (
+        GROQ_API_KEY, SERPER_API_KEY, GROQ_MODEL,
+        YOUR_NAME, YOUR_SKILLS, YOUR_EXPERIENCE_YEARS,
+        YOUR_RESUME_SUMMARY, MAX_AGENT_RPM, JOB_HISTORY_FILE
+    )
+except ImportError:
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+    SERPER_API_KEY = os.getenv("SERPER_API_KEY", "")
+    GROQ_MODEL = "qwen/qwen3.8-27b"
+    YOUR_NAME = "Full Stack Engineer"
+    YOUR_SKILLS = "Python, FastAPI, Next.js, TypeScript, Docker"
+    YOUR_EXPERIENCE_YEARS = "3"
+    YOUR_RESUME_SUMMARY = "Full-Stack Software Engineer building scalable microservices and dynamic web apps."
+    MAX_AGENT_RPM = 2
+    JOB_HISTORY_FILE = "data/job_history.json"
 
 CURRENT_YEAR = str(datetime.now().year)
 
 
-# ─── COMPACT SEARCH TOOL (Saves 85% Tokens) ───
+# ─── COMPACT SEARCH TOOL (Saves Tokens to avoid Groq 7k limit) ───
 @tool("Search Tech Jobs")
 def search_tech_jobs(query: str) -> str:
     """Searches Google for live software engineering job postings and returns concise, clean summaries."""
-    api_key = os.getenv("SERPER_API_KEY", "")
+    api_key = os.getenv("SERPER_API_KEY", "") or SERPER_API_KEY
     if not api_key:
         return "Error: SERPER_API_KEY not set."
     
@@ -71,7 +98,7 @@ def search_tech_jobs(query: str) -> str:
     payload = json.dumps({"q": query, "num": 4})
     
     try:
-        resp = requests.post(url, headers=headers, data=payload, timeout=12)
+        resp = requests.post(url, headers=headers, data=payload, timeout=15)
         if resp.status_code != 200:
             return f"Search error: HTTP {resp.status_code}"
         
@@ -93,14 +120,12 @@ def search_tech_jobs(query: str) -> str:
 
 
 def get_llm():
-    model = GROQ_MODEL
-    if "qwen" in model.lower():
-        model = "openai/gpt-oss-20b"
+    model = GROQ_MODEL or "qwen/qwen3.8-27b"
     model_name = model if model.startswith("groq/") else f"groq/{model}"
     
     return LLM(
         model=model_name,
-        api_key=GROQ_API_KEY,
+        api_key=os.getenv("GROQ_API_KEY") or GROQ_API_KEY,
         temperature=0.2,
         max_tokens=750
     )
@@ -157,7 +182,7 @@ def run_job_finder():
         backstory="Technical talent sourcer scouting LinkedIn, Indeed, Glassdoor, and startup boards for remote developer positions.",
         tools=[search_tech_jobs],
         llm=llm,
-        max_iter=3,
+        max_iter=2,
         max_rpm=MAX_AGENT_RPM,
         verbose=True
     )
@@ -219,18 +244,19 @@ def run_job_finder():
         )
 
         result = None
-        for attempt in range(3):
+        for attempt in range(1, 4):
             try:
                 result = str(crew.kickoff())
                 break
             except Exception as crew_err:
                 err_msg = str(crew_err).lower()
+                print(f"⚠️ Attempt {attempt}/3 error: {err_msg[:200]}")
                 if "429" in err_msg or "rate" in err_msg or "limit" in err_msg:
-                    wait_time = 15 * (attempt + 1)
-                    print(f"⏳ Rate limit hit. Retrying in {wait_time}s (Attempt {attempt+1}/3)...")
+                    wait_time = 65 * attempt
+                    print(f"⏳ Rate limit hit. Backing off for {wait_time}s...")
                     time.sleep(wait_time)
                 else:
-                    raise crew_err
+                    time.sleep(15)
 
         if not result or len(result) < 50:
             send_agent_report("Job Finder", "error", "Agent returned empty response after retries.")
@@ -281,6 +307,8 @@ def run_job_finder():
         print(f"  Error: {e}")
         return None
 
+
+main = run_job_finder
 
 if __name__ == "__main__":
     run_job_finder()
