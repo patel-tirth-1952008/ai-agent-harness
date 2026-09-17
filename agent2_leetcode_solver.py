@@ -12,25 +12,60 @@ import subprocess
 from datetime import datetime
 from typing import Dict, Any, List
 
-# Suppress litellm cache breakpoint warnings that cause Groq 400 errors
-os.environ["LITELLM_DROP_PARAMS"] = "True"
+# Monkeypatch CrewAI / LiteLLM bug: remove cache_breakpoint and cache_control to prevent Groq HTTP 400
+try:
+    import litellm
+    _orig_completion = litellm.completion
+    _orig_acompletion = litellm.acompletion
+
+    def _clean_messages(messages):
+        cleaned = []
+        for msg in messages:
+            if not isinstance(msg, dict):
+                cleaned.append(msg)
+                continue
+            new_msg = {k: v for k, v in msg.items() if k not in ["cache_breakpoint", "cache_control"]}
+            cleaned.append(new_msg)
+        return cleaned
+
+    def _patched_completion(*args, **kwargs):
+        if "messages" in kwargs:
+            kwargs["messages"] = _clean_messages(kwargs["messages"])
+        if "LITELLM_DROP_PARAMS" not in os.environ:
+            os.environ["LITELLM_DROP_PARAMS"] = "True"
+        kwargs["num_retries"] = 5
+        kwargs["retry_delay"] = 35.0
+        return _orig_completion(*args, **kwargs)
+
+    def _patched_acompletion(*args, **kwargs):
+        if "messages" in kwargs:
+            kwargs["messages"] = _clean_messages(kwargs["messages"])
+        if "LITELLM_DROP_PARAMS" not in os.environ:
+            os.environ["LITELLM_DROP_PARAMS"] = "True"
+        kwargs["num_retries"] = 5
+        kwargs["retry_delay"] = 35.0
+        return _orig_acompletion(*args, **kwargs)
+
+    litellm.completion = _patched_completion
+    litellm.acompletion = _patched_acompletion
+except Exception as e:
+    print(f"⚠️ LiteLLM patch failed to initialize: {e}")
 
 from crewai import Agent, Task, Crew, Process, LLM
 
 # ==========================================
 # CONFIGURATION & SETTINGS
 # ==========================================
-LEETCODE_BATCH_SIZE = int(os.getenv("LEETCODE_BATCH_SIZE", "1"))
-DELAY_BETWEEN_PROBLEMS = int(os.getenv("LEETCODE_DELAY_SECONDS", "90"))
 QUEUE_FILE = "leetcode_queue.json"
 SOLUTIONS_DIR = "leetcode_solutions"
+DELAY_BETWEEN_PROBLEMS = int(os.getenv("LEETCODE_DELAY_SECONDS", "65"))
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN") or os.getenv("PAT_TOKEN")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN") or os.getenv("GITHUB_PAT") or os.getenv("PAT_TOKEN")
 
-# Resilient model configuration with strict token bounds
+# Resilient model configuration with strict token bounds (under 1000 OTPM limit)
 llm = LLM(
-    model="groq/openai/gpt-oss-20b",
+    model="groq/qwen/qwen3.8-27b",
     api_key=GROQ_API_KEY,
     temperature=0.2,
     max_tokens=750,
@@ -97,19 +132,19 @@ def pop_next_problem() -> Dict[str, Any]:
 # ==========================================
 # AGENTS & TASK CREATION
 # ==========================================
-def solve_single_problem(problem: Dict[str, Any], max_retries: int = 3) -> bool:
+def solve_single_problem(problem: Dict[str, Any] = None, max_retries: int = 3) -> bool:
+    if problem is None:
+        problem = pop_next_problem()
+
     print(f"\n==================================================")
     print(f"🧩 Solving Problem #{problem['id']}: {problem['title']} [{problem['difficulty']}]")
     print(f"Topic: {problem['topic']}")
     print(f"==================================================")
 
     algo_specialist = Agent(
-        role="Senior Algorithm & Data Structures Specialist",
-        goal=f"Provide optimal Python solution, unit tests, and $O(N)$ complexity analysis for {problem['title']}.",
-        backstory=(
-            "You are an expert competitive programmer and algorithm engineer. "
-            "You write clean, strictly optimal Python 3 code with complete complexity explanations."
-        ),
+        role="Senior Algorithm Specialist",
+        goal=f"Provide optimal Python 3 solution and complexity analysis for {problem['title']}.",
+        backstory="Expert competitive programmer writing strictly optimal Python 3 code.",
         llm=llm,
         verbose=False,
         memory=False
@@ -119,7 +154,7 @@ def solve_single_problem(problem: Dict[str, Any], max_retries: int = 3) -> bool:
         description=(
             f"Solve LeetCode Problem #{problem['id']}: '{problem['title']}' ({problem['difficulty']}).\n"
             f"Topic: {problem['topic']}.\n\n"
-            "Produce output formatted strictly as:\n"
+            "Produce concise output formatted as:\n"
             "```python\n"
             "# Production-grade Python solution with class Solution\n"
             "```\n"
@@ -127,9 +162,9 @@ def solve_single_problem(problem: Dict[str, Any], max_retries: int = 3) -> bool:
             "- **Time Complexity:** O(...)\n"
             "- **Space Complexity:** O(...)\n\n"
             "### Explanation:\n"
-            "Concise breakdown of optimal strategy.\n\n"
+            "Brief breakdown of strategy.\n\n"
             "### Test Cases:\n"
-            "Example assert statements validating edge cases."
+            "Assert statements for edge cases."
         ),
         expected_output="Python solution with complexity analysis, explanation, and test cases.",
         agent=algo_specialist
@@ -164,9 +199,9 @@ def solve_single_problem(problem: Dict[str, Any], max_retries: int = 3) -> bool:
 
         except Exception as e:
             err_msg = str(e)
-            print(f"⚠️ Attempt {attempt}/{max_retries} failed: {err_msg}")
+            print(f"⚠️ Attempt {attempt}/{max_retries} failed: {err_msg[:200]}")
             if "429" in err_msg or "rate_limit" in err_msg.lower():
-                wait_time = 60 * attempt
+                wait_time = 65 * attempt
                 print(f"⏳ Rate limited. Backing off for {wait_time}s...")
                 time.sleep(wait_time)
             else:
@@ -174,6 +209,9 @@ def solve_single_problem(problem: Dict[str, Any], max_retries: int = 3) -> bool:
 
     print(f"❌ Failed to solve #{problem['id']} after {max_retries} attempts.")
     return False
+
+# Function alias for backwards compatibility with any runner import
+solve_leetcode_problem = solve_single_problem
 
 # ==========================================
 # GIT COMMIT & PUSH
@@ -184,42 +222,51 @@ def commit_and_push_solutions(solved_count: int):
         return
 
     try:
-        subprocess.run(["git", "config", "user.name", "github-actions[bot]"], check=True)
-        subprocess.run(["git", "config", "user.email", "github-actions[bot]@users.noreply.github.com"], check=True)
+        subprocess.run(["git", "config", "global", "user.name", "github-actions[bot]"], check=True)
+        subprocess.run(["git", "config", "global", "user.email", "github-actions[bot]@users.noreply.github.com"], check=True)
         subprocess.run(["git", "add", SOLUTIONS_DIR, QUEUE_FILE], check=True)
 
         commit_msg = f"feat(leetcode): auto-solve {solved_count} problem(s) [skip ci]"
-        subprocess.run(["git", "commit", "-m", commit_msg], check=True)
         
-        # Pull rebase before push to avoid remote conflict
-        subprocess.run(["git", "pull", "--rebase", "origin", "main"], check=False)
+        # Safe pull-rebase with stash
+        subprocess.run(["git", "stash"], check=False)
+        subprocess.run(["git", "pull", "--rebase", "origin", "main"], check=True)
+        subprocess.run(["git", "stash", "pop"], check=False)
+
+        subprocess.run(["git", "commit", "-m", commit_msg], check=True)
         subprocess.run(["git", "push", "origin", "main"], check=True)
         print(f"🚀 Successfully pushed {solved_count} solved problem(s) to GitHub!")
     except Exception as e:
-        print(f"⚠️ Git push failed or nothing to commit: {e}")
+        print(f"⚠️ Git push notice: {e}")
 
 # ==========================================
 # MAIN EXECUTION ENTRYPOINT
 # ==========================================
-def main():
-    print(f"🎯 Starting LeetCode Batch Runner: Target = {LEETCODE_BATCH_SIZE} problem(s)")
+def main(batch_count: int = None):
+    if batch_count is None:
+        batch_count = int(os.getenv("LEETCODE_BATCH", os.getenv("LEETCODE_BATCH_SIZE", "1")))
+        
+    print(f"🎯 Starting LeetCode Batch Runner: Target = {batch_count} problem(s)")
     solved_count = 0
 
-    for i in range(1, LEETCODE_BATCH_SIZE + 1):
-        print(f"\n--- Processing Batch Item {i}/{LEETCODE_BATCH_SIZE} ---")
+    for i in range(1, batch_count + 1):
+        print(f"\n--- Processing Batch Item {i}/{batch_count} ---")
         problem = pop_next_problem()
         
         success = solve_single_problem(problem)
         if success:
             solved_count += 1
 
-        # Pause between problems to safeguard Groq OTPM/TPM limits
-        if i < LEETCODE_BATCH_SIZE:
+        # Pause between problems to safeguard Groq OTPM limits
+        if i < batch_count:
             print(f"🛡️ Rate-limit shield: Sleeping {DELAY_BETWEEN_PROBLEMS}s before next problem...")
             time.sleep(DELAY_BETWEEN_PROBLEMS)
 
     commit_and_push_solutions(solved_count)
-    print(f"\n🎉 Batch run complete: {solved_count}/{LEETCODE_BATCH_SIZE} problems solved successfully.")
+    print(f"\n🎉 Batch run complete: {solved_count}/{batch_count} problems solved successfully.")
+
+# Function alias
+run_leetcode_solver = main
 
 if __name__ == "__main__":
     main()
